@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://api.github.com; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Loop Control Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header>
+    <h1>loop-control ダッシュボード</h1>
+    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を、<strong>参照だけ</strong>で表示します。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
+  </header>
+
+  <section class="auth">
+    <form id="tokenForm" autocomplete="off">
+      <label for="token">GitHub の fine-grained の個人用トークン</label>
+      <input id="token" type="password" placeholder="github_pat_…" spellcheck="false">
+      <label class="check"><input id="remember" type="checkbox"> このブラウザに覚えさせる（共有の PC では使わない）</label>
+      <button type="submit">表示する</button>
+      <button type="button" id="reload">読み直す</button>
+      <button type="button" id="forget">トークンを消す</button>
+    </form>
+    <details>
+      <summary>トークンの作り方</summary>
+      <ol>
+        <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
+        <li>Resource owner: <code>aiyzkn</code>。Repository access: Only select repositories → <code>loop-control</code></li>
+        <li>Repository permissions: <strong>Contents: Read-only</strong>（Metadata: Read-only は自動で付く）</li>
+        <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
+        <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
+      </ol>
+      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。このページは書き込みをしません。</p>
+    </details>
+    <p id="status" class="status" role="status"></p>
+  </section>
+
+  <main id="main" hidden>
+    <section><div id="summary" class="cards"></div></section>
+    <section><h2>PC の状況</h2><div id="pcs"></div></section>
+    <section><h2>タスク（進行中・待ち）</h2><div id="tasks" class="scroll"></div></section>
+    <section><h2>受付</h2><div id="inbox"></div></section>
+  </main>
+</body>
+</html>
