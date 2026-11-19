@@ -60,6 +60,8 @@ export function parseTask(path, text) {
     updated: fm.updated || '',
     progress: bulletValue(here, '進行中'),
     next: bulletValue(here, '次の一手'),
+    // PR / MR を拾うための本文（成果物と現在地。そのままは表示しない）
+    refsText: (section(text, '成果物') + '\n' + here).replace(/<!--[\s\S]*?-->/g, ''),
   };
 }
 
@@ -118,14 +120,20 @@ export function parseInbox(text) {
 export function pickFiles(treeEntries) {
   const tasks = [];
   const pcs = [];
+  const projects = [];
+  const archived = [];
   let inbox = '';
+  let roster = '';
   for (const e of treeEntries) {
     if (e.type !== 'blob') continue;
     if (/^projects\/[^/]+\/tasks\/[^/]+\.md$/.test(e.path)) tasks.push(e.path);
+    else if (/^projects\/[^/]+\/archive\/[^/]+\.md$/.test(e.path)) archived.push(e.path);   // 数えるだけで、読まない
+    else if (/^projects\/[^/]+\/project\.md$/.test(e.path)) projects.push(e.path);
     else if (/^state\/pcs\/[^/]+\.json$/.test(e.path)) pcs.push(e.path);
     else if (e.path === 'inbox.md') inbox = e.path;
+    else if (e.path === 'roster.md') roster = e.path;
   }
-  return { tasks, pcs, inbox };
+  return { tasks, pcs, inbox, projects, archived, roster };
 }
 
 // 「何分前」の表示。ISO 8601 が読めなければ空
@@ -145,4 +153,140 @@ export function ageText(iso, now = Date.now()) {
 export function isOrgMember(membership, membersStatus) {
   if (membership && membership.state === 'active') return true;
   return membersStatus === 204;
+}
+
+// ---- リンクの組み立て（外部の URL は決まったホストだけ） ----
+
+export const LINK_HOSTS = ['github.com', 'gitlab.com'];
+
+// <ホスト>/<パス> の URL を組み立てる。ホストが決まったもの以外・パスに使えない文字があれば空
+export function hostUrl(host, path = '') {
+  const h = String(host || '').trim().toLowerCase();
+  if (!LINK_HOSTS.includes(h)) return '';
+  const p = String(path || '').trim().replace(/^\/+|\/+$/g, '');
+  if (p && (!/^[A-Za-z0-9._~\-]+(\/[A-Za-z0-9._~\-]+)*$/.test(p) || p.split('/').some((x) => /^\.+$/.test(x)))) return '';
+  return p ? `https://${h}/${p}` : `https://${h}/`;
+}
+
+// アカウント（ユーザー・組織）のプロフィール。'-' や空は無し
+export function accountUrl(host, account) {
+  const a = String(account || '').trim().replace(/^@/, '');
+  if (!a || a === '-' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a)) return '';
+  return hostUrl(host, a);
+}
+
+const unquote = (s) => String(s || '').trim().replace(/^`+|`+$/g, '').trim();
+
+// project.md の先頭と「## リポジトリ」の表（列: キー・ホスト・リポジトリ・アカウント・本流リモート・基準ブランチ・備考）
+export function parseProject(path, text) {
+  const fm = parseFrontMatter(text);
+  const m = /^projects\/([^/]+)\/project\.md$/.exec(path);
+  const repos = [];
+  for (const l of section(text, 'リポジトリ').split(/\r?\n/)) {
+    if (!/^\s*\|/.test(l) || /^\s*\|\s*-/.test(l)) continue;
+    const cells = l.trim().replace(/^\||\|$/g, '').split('|').map(unquote);
+    if (cells[0] === 'キー' || cells.length < 4) continue;
+    const [key, host, repo, account, remote = '', branch = ''] = cells;
+    repos.push({ key, host, repo, account, remote, branch, url: hostUrl(host, repo), accountUrl: accountUrl(host, account) });
+  }
+  return { path, id: m ? m[1] : (fm.project || ''), title: fm.title || '', stage: fm.default_stage || '', repos };
+}
+
+// roster.md の名簿の表。line は 1 始まりの行の番号（GitHub の #L<n> で辿る）
+export function parseRoster(text) {
+  const out = [];
+  String(text).split(/\r?\n/).forEach((l, i) => {
+    if (!/^\s*\|/.test(l) || /^\s*\|\s*-/.test(l)) return;
+    const cells = l.trim().replace(/^\||\|$/g, '').split('|').map(unquote);
+    if (cells[0] === 'ID' || !cells[0]) return;
+    out.push({ id: cells[0], pc: cells[1] || '', tool: cells[2] || '', note: cells[5] || '', line: i + 1 });
+  });
+  return out;
+}
+
+// 本文の中の PR / MR。完全な URL（github.com の /pull/<n>、gitlab.com の /-/merge_requests/<n>）と、
+// 案件のリポジトリが 1 つに決まるときの #<n>（GitHub）・!<n>（GitLab）
+export function findPullRequests(text, repos = []) {
+  const s = String(text || '');
+  const seen = new Set();
+  const out = [];
+  const add = (url, label) => { if (url && !seen.has(url)) { seen.add(url); out.push({ url, label }); } };
+  const re = /https:\/\/(github\.com|gitlab\.com)\/([A-Za-z0-9._\-]+(?:\/[A-Za-z0-9._\-]+)+?)\/(pull|-\/merge_requests)\/(\d+)/g;
+  let m;
+  while ((m = re.exec(s))) {
+    const url = hostUrl(m[1], `${m[2]}/${m[3]}/${m[4]}`);
+    add(url, `${m[2].split('/').pop()}${m[3] === 'pull' ? '#' : '!'}${m[4]}`);
+  }
+  const one = (host) => { const r = repos.filter((x) => String(x.host).toLowerCase() === host && x.url); return r.length === 1 ? r[0] : null; };
+  const gh = one('github.com');
+  const gl = one('gitlab.com');
+  const plain = s.replace(re, ' ').replace(/https?:\/\/\S+/g, ' ');
+  const ref = /(^|[\s（(、,])([#!])(\d{1,6})(?![\w#!])/g;
+  while ((m = ref.exec(plain))) {
+    if (m[2] === '#' && gh) add(`${gh.url}/pull/${m[3]}`, `${gh.repo.split('/').pop()}#${m[3]}`);
+    if (m[2] === '!' && gl) add(`${gl.url}/-/merge_requests/${m[3]}`, `${gl.repo.split('/').pop()}!${m[3]}`);
+  }
+  return out;
+}
+
+// ---- 信号（3 色）とグラフ用の集計 ----
+
+const HOUR = 3600 * 1000;
+
+// タスクの信号: red = 止まっている、yellow = 判断待ち・印が古い（24 時間超）、green = 進んでいる、off = 着手待ち・下書き
+export function taskSignal(t, now = Date.now()) {
+  if (t.status === 'blocked') return 'red';
+  if (t.status === 'waiting') return 'yellow';
+  if (t.status === 'doing') {
+    const hb = Date.parse(t.heartbeatAt);
+    return !Number.isNaN(hb) && now - hb > 24 * HOUR ? 'yellow' : 'green';
+  }
+  return 'off';
+}
+
+// PC の信号: red = 失敗・3 時間超の無音、yellow = 上限で止まったセッションがある・見送り、green = それ以外
+export function pcSignal(p, now = Date.now()) {
+  const u = Date.parse(p.updatedAt);
+  if (p.error || p.decision === 'error' || Number.isNaN(u) || now - u > 3 * HOUR) return 'red';
+  if ((p.sessions && p.sessions.limit > 0) || p.decision === 'skip') return 'yellow';
+  return 'green';
+}
+
+// 全体の信号: 赤が 1 つでもあれば赤、次に黄、緑があれば緑、何も無ければ off
+export function overallSignal(signals) {
+  for (const c of ['red', 'yellow', 'green']) if (signals.includes(c)) return c;
+  return 'off';
+}
+
+// 案件ごと・状態ごとの件数（グラフの積み上げ）
+export function countByProject(tasks, statuses = ['doing', 'waiting', 'blocked', 'ready', 'draft']) {
+  const map = new Map();
+  for (const t of tasks) {
+    if (!statuses.includes(t.status)) continue;
+    if (!map.has(t.project)) map.set(t.project, Object.fromEntries(statuses.map((s) => [s, 0])));
+    map.get(t.project)[t.status]++;
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([project, counts]) => ({ project, counts }));
+}
+
+// タスクの ID（先頭の 8 桁の日付）で、日ごとの起票（tasks と archive）と完了（archive）の数。直近 days 日
+export function countByDay(treePaths, days = 14, now = Date.now()) {
+  const ymd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) out.push({ day: ymd(new Date(now - i * 24 * HOUR)), created: 0, archived: 0 });
+  const idx = new Map(out.map((d, i) => [d.day, i]));
+  for (const p of treePaths) {
+    const m = /^projects\/[^/]+\/(tasks|archive)\/(\d{8})-[^/]+\.md$/.exec(p);
+    if (!m || !idx.has(m[2])) continue;
+    const d = out[idx.get(m[2])];
+    d.created++;
+    if (m[1] === 'archive') d.archived++;
+  }
+  return out;
+}
+
+// 完了の割合（0〜1）。archive の数 /（archive + 進行中・待ち）
+export function doneRatio(archivedCount, openCount) {
+  const all = archivedCount + openCount;
+  return all ? archivedCount / all : 0;
 }

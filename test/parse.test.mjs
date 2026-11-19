@@ -1,7 +1,8 @@
 // node --test test/  （Node.js 18 以上。依存なし）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFrontMatter, parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember, section, bulletValue } from '../parse.js';
+import { parseFrontMatter, parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember, section, bulletValue,
+  hostUrl, accountUrl, parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal, countByProject, countByDay, doneRatio } from '../parse.js';
 
 const task = `---
 id: 20261119-demo
@@ -104,8 +105,10 @@ test('読むファイルを選ぶ（完了したタスクは読まない）', ()
     { type: 'blob', path: 'state/pcs/pc1-claude.json' },
     { type: 'tree', path: 'state/pcs' },
     { type: 'blob', path: 'inbox.md' },
+    { type: 'blob', path: 'roster.md' },
   ]);
-  assert.deepEqual(r, { tasks: ['projects/demo/tasks/a.md'], pcs: ['state/pcs/pc1-claude.json'], inbox: 'inbox.md' });
+  assert.deepEqual(r, { tasks: ['projects/demo/tasks/a.md'], pcs: ['state/pcs/pc1-claude.json'], inbox: 'inbox.md',
+    projects: ['projects/demo/project.md'], archived: ['projects/demo/archive/b.md'], roster: 'roster.md' });
 });
 
 test('何分前の表示', () => {
@@ -121,4 +124,90 @@ test('組織への所属の判定', () => {
   assert.equal(isOrgMember({ state: 'pending' }, 404), false);
   assert.equal(isOrgMember(null, 204), true);
   assert.equal(isOrgMember(null, 404), false);
+});
+
+test('URL は決まったホストだけで組み立てる', () => {
+  assert.equal(hostUrl('github.com', 'aiyzkn/loop-control'), 'https://github.com/aiyzkn/loop-control');
+  assert.equal(hostUrl('GitLab.com', '/yzkn/vanilla/'), 'https://gitlab.com/yzkn/vanilla');
+  assert.equal(hostUrl('evil.example', 'a/b'), '');
+  assert.equal(hostUrl('github.com', 'a/b"onclick=x'), '');
+  assert.equal(hostUrl('github.com', '../x'), '');
+  assert.equal(accountUrl('github.com', 'yzknai'), 'https://github.com/yzknai');
+  assert.equal(accountUrl('gitlab.com', '@yzkn'), 'https://gitlab.com/yzkn');
+  assert.equal(accountUrl('github.com', '-'), '');
+  assert.equal(accountUrl('github.com', 'a b'), '');
+});
+
+const project = `---
+project: demo
+title: デモの案件
+default_stage: implement
+---
+
+# デモの案件
+
+## リポジトリ
+
+| キー | ホスト | リポジトリ | アカウント | 本流リモート | 基準ブランチ | 備考 |
+|---|---|---|---|---|---|---|
+| \`main\` | \`github.com\` | \`aiyzkn/demo\` | \`yzknai\` | \`origin\` | \`main\` | 本体 |
+| \`e2e\` | \`gitlab.com\` | \`yzkn/demo-e2e\` | \`-\` | \`origin\` | \`main\` | |
+| \`bad\` | \`example.com\` | \`x/y\` | \`z\` | \`origin\` | \`main\` | |
+
+## 進め方
+`;
+
+test('project.md のリポジトリの表を読む', () => {
+  const p = parseProject('projects/demo/project.md', project);
+  assert.equal(p.id, 'demo');
+  assert.equal(p.title, 'デモの案件');
+  assert.equal(p.repos.length, 3);
+  assert.deepEqual(p.repos[0], { key: 'main', host: 'github.com', repo: 'aiyzkn/demo', account: 'yzknai', remote: 'origin', branch: 'main', url: 'https://github.com/aiyzkn/demo', accountUrl: 'https://github.com/yzknai' });
+  assert.equal(p.repos[1].accountUrl, '');
+  assert.equal(p.repos[2].url, '');
+});
+
+test('名簿を読む（行の番号つき）', () => {
+  const r = parseRoster('# 名簿\n\n| ID | PC | 道具 | AI のアカウント | 得意 | 備考 |\n|---|---|---|---|---|---|\n| `pc1-claude` | PC1 | Claude Code | x | y | GitHub: yzknai |\n');
+  assert.deepEqual(r, [{ id: 'pc1-claude', pc: 'PC1', tool: 'Claude Code', note: 'GitHub: yzknai', line: 5 }]);
+});
+
+test('PR / MR を拾う', () => {
+  const repos = parseProject('projects/demo/project.md', project).repos;
+  const text = '- PR https://github.com/aiyzkn/demo/pull/12（説明）\n- MR https://gitlab.com/yzkn/demo-e2e/-/merge_requests/3\n- 続き #12 と #13、MR !4\n- 外部 https://evil.example/a/pull/1';
+  assert.deepEqual(findPullRequests(text, repos), [
+    { url: 'https://github.com/aiyzkn/demo/pull/12', label: 'demo#12' },
+    { url: 'https://gitlab.com/yzkn/demo-e2e/-/merge_requests/3', label: 'demo-e2e!3' },
+    { url: 'https://github.com/aiyzkn/demo/pull/13', label: 'demo#13' },
+    { url: 'https://gitlab.com/yzkn/demo-e2e/-/merge_requests/4', label: 'demo-e2e!4' },
+  ]);
+  // GitHub のリポジトリが 2 つあると #番号 は決められない
+  const two = [{ host: 'github.com', repo: 'a/x', url: 'https://github.com/a/x' }, { host: 'github.com', repo: 'a/y', url: 'https://github.com/a/y' }];
+  assert.deepEqual(findPullRequests('#5', two), []);
+});
+
+test('信号の判定', () => {
+  const now = Date.parse('2026-11-19T12:00:00+09:00');
+  assert.equal(taskSignal({ status: 'blocked' }, now), 'red');
+  assert.equal(taskSignal({ status: 'waiting' }, now), 'yellow');
+  assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-19T11:00:00+09:00' }, now), 'green');
+  assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-17T11:00:00+09:00' }, now), 'yellow');
+  assert.equal(taskSignal({ status: 'ready' }, now), 'off');
+  assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', decision: 'kick-work', sessions: { limit: 0 } }, now), 'green');
+  assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', decision: 'skip' }, now), 'yellow');
+  assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', sessions: { limit: 1 } }, now), 'yellow');
+  assert.equal(pcSignal({ updatedAt: '2026-11-19T08:00:00+09:00' }, now), 'red');
+  assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', decision: 'error' }, now), 'red');
+  assert.equal(overallSignal(['green', 'yellow', 'off']), 'yellow');
+  assert.equal(overallSignal(['off']), 'off');
+});
+
+test('グラフ用の集計', () => {
+  const c = countByProject([{ project: 'b', status: 'doing' }, { project: 'a', status: 'ready' }, { project: 'a', status: 'ready' }, { project: 'a', status: 'done' }]);
+  assert.deepEqual(c.map((x) => [x.project, x.counts.ready, x.counts.doing]), [['a', 2, 0], ['b', 0, 1]]);
+  const now = Date.parse('2026-11-19T12:00:00+09:00');
+  const d = countByDay(['projects/a/tasks/20261119-x.md', 'projects/a/archive/20261119-y.md', 'projects/a/archive/20261118-z.md', 'projects/a/tasks/20261101-old.md', 'projects/a/project.md'], 3, now);
+  assert.deepEqual(d, [{ day: '20261117', created: 0, archived: 0 }, { day: '20261118', created: 1, archived: 1 }, { day: '20261119', created: 2, archived: 1 }]);
+  assert.equal(doneRatio(3, 1), 0.75);
+  assert.equal(doneRatio(0, 0), 0);
 });
