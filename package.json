@@ -1,0 +1,9 @@
+{
+  "name": "loop-control-dashboard",
+  "private": true,
+  "type": "module",
+  "description": "loop-control（指令リポジトリ）を参照だけで表示する静的なダッシュボード。依存なし",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

@@ -1,0 +1,38 @@
+:root {
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --card: #f6f8fa;
+  --ok: #1a7f37; --warn: #9a6700; --err: #cf222e; --link: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --card: #151b23; --ok: #3fb950; --warn: #d29922; --err: #f85149; --link: #4493f8; }
+}
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1200px; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, "Yu Gothic UI", "Hiragino Sans", sans-serif; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 24px 0 8px; }
+h3 { font-size: 14px; margin: 12px 0 4px; }
+a { color: var(--link); }
+code { background: var(--card); padding: 0 4px; border-radius: 4px; }
+.note, .sub { color: var(--muted); }
+.sub { font-size: 12px; }
+.auth form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.auth label[for="token"] { width: 100%; }
+.auth input[type="password"] { flex: 1 1 320px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.auth .check { width: 100%; color: var(--muted); }
+button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); cursor: pointer; }
+.status { margin: 8px 0; }
+.status.ok { color: var(--ok); }
+.status.error { color: var(--err); }
+.cards { display: flex; flex-wrap: wrap; gap: 8px; }
+.card { flex: 1 1 120px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.card .num { font-size: 22px; font-weight: 600; }
+.card.alert { border-color: var(--err); }
+.card.alert .num { color: var(--err); }
+.scroll, #pcs { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+th { background: var(--card); white-space: nowrap; }
+td.warn { color: var(--warn); }
+td.pr-urgent { color: var(--err); font-weight: 600; }
+td.pr-high { color: var(--warn); }
+tr.st-blocked td:first-child { color: var(--err); }
+tr.st-waiting td:first-child { color: var(--warn); }
