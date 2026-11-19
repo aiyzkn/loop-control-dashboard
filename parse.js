@@ -58,6 +58,8 @@ export function parseTask(path, text) {
     heartbeatAt: fm.heartbeat_at || '',
     created: fm.created || '',
     updated: fm.updated || '',
+    order: parseOrder(fm.order),
+    questions: parseQuestions(text),
     progress: bulletValue(here, '進行中'),
     next: bulletValue(here, '次の一手'),
     // PR / MR を拾うための本文（成果物と現在地。そのままは表示しない）
@@ -69,12 +71,52 @@ const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 const STATUS_RANK = { doing: 0, waiting: 1, blocked: 2, ready: 3, draft: 4, done: 5, dropped: 6 };
 export function priorityRank(p) { return p in PRIORITY_RANK ? PRIORITY_RANK[p] : 2; }
 
-// 一覧の並び: 状態ごとに、優先度の高い順・古い順（status.ps1 と同じ考え方）
+// order（任意の数。小さいほど先）。無い・数でなければ null
+export function parseOrder(v) {
+  const s = String(v ?? '').trim();
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  return Number(s);
+}
+
+// 同じ優先度の中の並び: order（無いものは後ろ）→ 古い順
+export function compareInPriority(a, b) {
+  const ao = a.order ?? null, bo = b.order ?? null;
+  if (ao !== null && bo !== null && ao !== bo) return ao - bo;
+  if (ao !== null && bo === null) return -1;
+  if (ao === null && bo !== null) return 1;
+  return String(a.created).localeCompare(String(b.created));
+}
+
+// 一覧の並び: 状態ごとに、優先度の高い順 → order → 古い順（status.ps1 と同じ考え方）
 export function sortTasks(tasks) {
   return [...tasks].sort((a, b) =>
     (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) ||
     priorityRank(a.priority) - priorityRank(b.priority) ||
-    String(a.created).localeCompare(String(b.created)));
+    compareInPriority(a, b));
+}
+
+// 「利用者への質問と回答」の質問。`- Q<n>（…）: 質問` と、その下の `  - 回答: …`。line・answerLine は 0 始まり
+export function parseQuestions(text) {
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  let inSec = false;
+  let fence = false;
+  let cur = null;
+  lines.forEach((l, i) => {
+    if (/^## /.test(l)) { inSec = l.slice(3).trim() === '利用者への質問と回答'; cur = null; return; }
+    if (!inSec) return;
+    if (/^\s*```/.test(l)) { fence = !fence; return; }
+    if (fence || /^\s*<!--/.test(l)) return;
+    const q = /^-\s*(Q\d+)(?![\w])\s*(.*)$/.exec(l);
+    if (q) {
+      cur = { id: q[1], question: q[2].replace(/^[（(][^）)]*[）)]\s*/, '').replace(/^[:：]\s*/, '').trim(), answer: '', answerLine: -1, line: i };
+      out.push(cur);
+      return;
+    }
+    const a = /^\s+-\s*回答[:：]\s*(.*)$/.exec(l);
+    if (a && cur && cur.answerLine < 0) { cur.answer = a[1].trim(); cur.answerLine = i; }
+  });
+  return out;
 }
 
 // 受付（inbox.md）: 「## 」見出し 1 つが 1 件。コードの囲みの中と「## 手が空いた時に実行するタスク」の節は数えない（Get-InboxSummary と同じ）。

@@ -2,7 +2,7 @@
   "name": "loop-control-dashboard",
   "private": true,
   "type": "module",
-  "description": "loop-control（指令リポジトリ）を参照だけで表示する静的なダッシュボード。依存なし",
+  "description": "loop-control（指令リポジトリ）を表示し、タスクの書き換え・並べ替えもできる静的なダッシュボード。依存なし",
   "scripts": {
     "test": "node --test test/"
   }
