@@ -233,10 +233,10 @@ export function findPullRequests(text, repos = []) {
 
 const HOUR = 3600 * 1000;
 
-// タスクの信号: red = 止まっている、yellow = 判断待ち・印が古い（24 時間超）、green = 進んでいる、off = 着手待ち・下書き
+// タスクの信号: red = 止まっている、yellow = 判断待ち・着手待ち（日数によらず）・印が古い（24 時間超）、green = 進んでいる、off = 下書き
 export function taskSignal(t, now = Date.now()) {
   if (t.status === 'blocked') return 'red';
-  if (t.status === 'waiting') return 'yellow';
+  if (t.status === 'waiting' || t.status === 'ready') return 'yellow';
   if (t.status === 'doing') {
     const hb = Date.parse(t.heartbeatAt);
     return !Number.isNaN(hb) && now - hb > 24 * HOUR ? 'yellow' : 'green';

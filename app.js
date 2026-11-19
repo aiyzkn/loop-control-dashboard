@@ -130,7 +130,7 @@ const STATUS_JA = { doing: '作業中', waiting: '判断待ち', blocked: '止�
 const OPEN = ['doing', 'waiting', 'blocked', 'ready', 'draft'];
 const PRIORITY_JA = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
 const DECISION_JA = { 'kick-work': '起こした（作業）', 'kick-idle': '起こした（手が空いたとき）', skip: '見送り', error: '失敗' };
-const SIGNAL_JA = { red: '赤（止まっている・失敗）', yellow: '黄（判断待ち・注意）', green: '緑（進んでいる）', off: '消灯（動きなし）' };
+const SIGNAL_JA = { red: '赤（止まっている・失敗）', yellow: '黄（判断待ち・着手待ち・注意）', green: '緑（進んでいる）', off: '消灯（下書き・動きなし）' };
 
 // 指令リポジトリ（CONFIG で固定）の blob。line を渡すと、その行へ
 function blobUrl(branch, path, line) {

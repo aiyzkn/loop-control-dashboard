@@ -192,7 +192,8 @@ test('信号の判定', () => {
   assert.equal(taskSignal({ status: 'waiting' }, now), 'yellow');
   assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-19T11:00:00+09:00' }, now), 'green');
   assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-17T11:00:00+09:00' }, now), 'yellow');
-  assert.equal(taskSignal({ status: 'ready' }, now), 'off');
+  assert.equal(taskSignal({ status: 'ready', created: '2026-11-19T11:59:00+09:00' }, now), 'yellow');
+  assert.equal(taskSignal({ status: 'draft' }, now), 'off');
   assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', decision: 'kick-work', sessions: { limit: 0 } }, now), 'green');
   assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', decision: 'skip' }, now), 'yellow');
   assert.equal(pcSignal({ updatedAt: '2026-11-19T11:30:00+09:00', sessions: { limit: 1 } }, now), 'yellow');
