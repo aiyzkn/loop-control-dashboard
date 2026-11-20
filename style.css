@@ -41,13 +41,13 @@ tr.st-waiting td:first-child { color: var(--warn); }
 :root {
   --st-doing: #1a7f37; --st-waiting: #bf8700; --st-blocked: #cf222e; --st-ready: #0969da; --st-draft: #8c959f;
   --lamp-off: #d0d7de; --housing: #24292f; --needle: #24292f;
-  --created: #8c959f; --archived: #1a7f37;
+  --created: #8c959f; --archived: #1a7f37; --done: #8250df;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --st-doing: #3fb950; --st-waiting: #d29922; --st-blocked: #f85149; --st-ready: #4493f8; --st-draft: #6e7681;
     --lamp-off: #30363d; --housing: #010409; --needle: #e6edf3;
-    --created: #6e7681; --archived: #3fb950;
+    --created: #6e7681; --archived: #3fb950; --done: #a371f7;
   }
 }
 .docs { margin: 8px 0 0; }
@@ -192,3 +192,30 @@ details.fold > summary h2 { display: inline; margin: 0; }
   .topbar-row { align-items: flex-start; }
   .token-panel { position: fixed; left: 16px; right: 16px; top: 96px; width: auto; }
 }
+
+/* ---- ビジュアル（カード・マトリックス・ツリーマップ） ---- */
+.viz-block { margin: 8px 0 20px; }
+.key.done, .seg.done { background: var(--done); fill: var(--done); }
+.pcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.pcard { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); min-width: 0; }
+.pcard.alert { border-color: var(--err); }
+.pcard-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.pcard-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard-num { font-size: 26px; font-weight: 600; line-height: 1.3; }
+.pcard-bar { display: block; width: 100%; height: 6px; margin: 4px 0; border-radius: 3px; background: var(--line); }
+.badge.pr-high-badge { background: transparent; border: 1px solid var(--warn); color: var(--warn); }
+table.matrix { border-collapse: collapse; min-width: 560px; }
+table.matrix th, table.matrix td { padding: 4px 8px; border: 1px solid var(--line); text-align: center; white-space: nowrap; }
+table.matrix tbody th { text-align: left; font-weight: normal; }
+table.matrix .mx-group { color: var(--muted); font-weight: normal; }
+.mx-cell { background: color-mix(in srgb, var(--link) calc(var(--a, 0) * 100%), transparent); }
+.mx-cell.mx-pr.pr-urgent { background: color-mix(in srgb, var(--err) calc(var(--a, 0) * 100%), transparent); }
+.mx-cell.mx-pr.pr-high { background: color-mix(in srgb, var(--warn) calc(var(--a, 0) * 100%), transparent); }
+.mx-cell.zero { color: var(--muted); }
+.mx-total { font-weight: 600; background: var(--card); }
+th.mx-st.st-doing { color: var(--st-doing); } th.mx-st.st-waiting { color: var(--st-waiting); } th.mx-st.st-blocked { color: var(--st-blocked); } th.mx-st.st-ready { color: var(--st-ready); } th.mx-st.st-draft { color: var(--st-draft); }
+svg.treemap { width: 100%; height: auto; display: block; }
+.tm-outer { fill: var(--card); stroke: var(--bg); stroke-width: 2; }
+.tm-cell { opacity: 0.85; }
+.tm-node:hover .tm-cell { opacity: 1; }
+.tm-label { font-size: 12px; fill: var(--fg); font-weight: 600; }
