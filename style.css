@@ -219,3 +219,31 @@ svg.treemap { width: 100%; height: auto; display: block; }
 .tm-cell { opacity: 0.85; }
 .tm-node:hover .tm-cell { opacity: 1; }
 .tm-label { font-size: 12px; fill: var(--fg); font-weight: 600; }
+
+/* ---- ガントチャート・リボンチャート ---- */
+:root {
+  --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-other: #8c959f;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-other: #6e7681; }
+}
+.cat-1 { fill: var(--cat-1); background: var(--cat-1); } .cat-2 { fill: var(--cat-2); background: var(--cat-2); } .cat-3 { fill: var(--cat-3); background: var(--cat-3); }
+.cat-4 { fill: var(--cat-4); background: var(--cat-4); } .cat-5 { fill: var(--cat-5); background: var(--cat-5); } .cat-6 { fill: var(--cat-6); background: var(--cat-6); }
+.cat-7 { fill: var(--cat-7); background: var(--cat-7); } .cat-other { fill: var(--cat-other); background: var(--cat-other); }
+svg.gantt { width: 100%; min-width: 640px; height: auto; display: block; }
+svg.gantt .grid { stroke: var(--line); stroke-width: 1; }
+svg.gantt .axis, svg.ribbon-chart .axis { fill: var(--muted); font-size: 11px; }
+.gantt-hit { fill: transparent; }
+.gantt-row:hover .gantt-hit { fill: var(--card); }
+.gantt-label { fill: var(--fg); font-size: 12px; }
+.gantt-bar { opacity: 0.9; }
+.gantt-row:hover .gantt-bar { opacity: 1; }
+.gantt-clip { fill: #fff; font-size: 12px; font-weight: 700; }
+.gantt-hb { fill: var(--bg); stroke: var(--fg); stroke-width: 1.5; }
+.key.hb { background: var(--bg); border: 1.5px solid var(--fg); border-radius: 50% !important; }
+.gantt-now { stroke: var(--err); stroke-width: 1.5; stroke-dasharray: 3 3; }
+svg.ribbon-chart { width: 100%; min-width: 560px; height: auto; display: block; }
+.ribbon { opacity: 0.35; }
+.ribbon-bar { stroke: var(--bg); stroke-width: 1; }
+.ribbon:hover { opacity: 0.6; }
+.ribbon-label { fill: var(--fg); font-size: 11px; }

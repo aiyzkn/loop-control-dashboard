@@ -91,3 +91,83 @@ export function squarify(items, x, y, w, h) {
   if (row.length) layout(row);
   return out;
 }
+
+// ---- 時間の軸（ガントチャート・リボンチャート） ----
+
+const DAY = 24 * 3600 * 1000;
+const ymd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+
+// 直近 days 日の窓（今日を含む。ローカルの日付の 0 時から）。{ from, to, days: ['YYYYMMDD', …] }
+export function dayWindow(days, now = Date.now()) {
+  const today = new Date(now);
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1));
+  const list = [];
+  for (let i = 0; i < days; i++) list.push(ymd(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)));
+  return { from: start.getTime(), to: now, days: list };
+}
+
+// ガントチャートの行。tasks = parseTask の形（完了したものは archived: true・status: done など）。
+// 始まり = created、終わり = 完了したものは updated、進行中は now。窓（from〜to）に掛からないものは除く。
+// x0・x1 は窓の中の位置（0〜1）。clipped は始まりが窓より前。並びは 進行中が先 → 始まりの古い順
+export function ganttRows(tasks, from, to) {
+  const span = Math.max(to - from, 1);
+  const rows = [];
+  for (const t of tasks) {
+    const s = Date.parse(t.created);
+    if (Number.isNaN(s)) continue;
+    const doneLike = t.archived || t.status === 'done' || t.status === 'dropped';
+    let e = doneLike ? Date.parse(t.updated) : to;
+    if (Number.isNaN(e) || e < s) e = s;
+    if (e < from || s > to) continue;
+    const hb = Date.parse(t.heartbeatAt);
+    rows.push({
+      id: t.id, title: t.title, project: t.project, status: doneLike ? (t.status === 'dropped' ? 'dropped' : 'done') : t.status,
+      start: s, end: e, done: doneLike,
+      x0: Math.max(0, (s - from) / span), x1: Math.min(1, (e - from) / span), clipped: s < from,
+      hb: !doneLike && !Number.isNaN(hb) && hb >= from && hb <= to ? (hb - from) / span : null,
+    });
+  }
+  return rows.sort((a, b) => Number(a.done) - Number(b.done) || a.start - b.start || String(a.id).localeCompare(String(b.id)));
+}
+
+// 案件ごと・日ごとの起票の数（タスク ID の日付で数える。tasks と archive）。{ projects: [...], days, values: { 案件: [日ごとの数] } }
+export function createdSeries(treePaths, days) {
+  const idx = new Map(days.map((d, i) => [d, i]));
+  const values = {};
+  for (const p of treePaths) {
+    const m = /^projects\/([^/]+)\/(?:tasks|archive)\/(\d{8})-[^/]+\.md$/.exec(p);
+    if (!m || !idx.has(m[2])) continue;
+    (values[m[1]] ||= days.map(() => 0))[idx.get(m[2])]++;
+  }
+  const projects = Object.keys(values).sort((a, b) => values[b].reduce((x, y) => x + y, 0) - values[a].reduce((x, y) => x + y, 0) || a.localeCompare(b));
+  return { projects, days, values };
+}
+
+// リボンチャートの配置。期間ごとに、値の大きい順に上から積む（順位が入れ替わると、帯が交差する）。
+// 返すのは { columns: [{ total, segs: [{ project, value, y0, y1, rank }] }], max }。y は 0〜1（期間の最大の合計で割る）
+export function ribbonLayout(series) {
+  const n = series.days.length;
+  const totals = [];
+  const columns = [];
+  for (let i = 0; i < n; i++) {
+    const vals = series.projects.map((p) => ({ project: p, value: series.values[p][i] })).filter((v) => v.value > 0)
+      .sort((a, b) => b.value - a.value || series.projects.indexOf(a.project) - series.projects.indexOf(b.project));
+    totals.push(vals.reduce((a, v) => a + v.value, 0));
+    columns.push(vals);
+  }
+  const max = Math.max(1, ...totals);
+  return {
+    max,
+    columns: columns.map((vals, i) => {
+      let y = 0;
+      return { total: totals[i], segs: vals.map((v, rank) => { const y0 = y; y += v.value / max; return { ...v, y0, y1: y, rank }; }) };
+    }),
+  };
+}
+
+// 累計にする（リボンチャート用。日ごとの数は飛び飛びで、隣の期間に帯がつながらないため）
+export function cumulative(series) {
+  const values = {};
+  for (const p of series.projects) { let a = 0; values[p] = series.values[p].map((v) => (a += v)); }
+  return { ...series, values };
+}
