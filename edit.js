@@ -200,6 +200,85 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
   return { text: out, changed: true, notes };
 }
 
+// ---- 依頼の登録（受付への追記・タスクファイルの作成） ----
+
+export const SOURCES = ['inbox', 'direct', 'file', 'idle'];
+const STAGE_INBOX = { propose: '提案だけ', implement: '実装まで', merge: 'マージまで' };
+const PRIORITY_INBOX = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
+
+// 案件の名前（projects/ のフォルダ名）。英数字とハイフン・下線・点
+export function isProjectName(v) {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(v || '')) && !/^\.+$/.test(String(v));
+}
+
+// 短い名前（タスク ID の後半）。new-task.ps1 と同じく、小文字の英数字とハイフンにし、40 文字まで
+export function normalizeSlug(v) {
+  let s = String(v || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (s.length > 40) s = s.slice(0, 40).replace(/-+$/, '');
+  return s;
+}
+
+// タスク ID: <日付 8 桁>-<短い名前>。同じ案件の tasks/・archive/ に同じ名前があれば -2, -3 …（new-task.ps1 と同じ）
+export function newTaskId(slug, existing, now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const base = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${slug}`;
+  const taken = new Set(existing);
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+// 本文を、タスクファイル・受付の節を壊さない形にする。行頭の # は \# にする（「## ログ」などの見出しと取り違えないため）。
+// 制御文字（改行・タブ以外）を除き、改行は LF に揃え、前後の空行を除く
+export function safeBody(v) {
+  return String(v ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/g, '')
+    .split('\n').map((l) => l.replace(/^(\s*)#/, '$1\\#').replace(/^(\s*)```/, '$1\\`\\`\\`')).join('\n')
+    .replace(/^\n+|\s+$/g, '');
+}
+
+// 受付（inbox.md）に足す 1 件の文面。AGENTS.md・inbox.md の書き方（見出し + 段階・担当・優先 + 本文）
+export function inboxEntry({ project, title, stage, priority, assignee, body }) {
+  const p = String(project || '') === '新規' ? '新規' : project;
+  if (p !== '新規' && !isProjectName(p)) throw new Error('案件を選んでください');
+  const t = oneLine(title);
+  if (!t) throw new Error('件名が空です');
+  const lines = [`## ${p}: ${t}`];
+  if (STAGE_INBOX[stage]) lines.push(`段階: ${STAGE_INBOX[stage]}`);
+  const a = oneLine(assignee);
+  if (a && a !== 'any') lines.push(`担当: ${a}`);
+  if (PRIORITY_INBOX[priority]) lines.push(`優先: ${PRIORITY_INBOX[priority]}`);
+  const b = safeBody(body);
+  if (b) lines.push('', b);
+  return lines.join('\n');
+}
+
+// 受付の末尾（目印 `<!-- ここから下に追記 -->` の下。無ければファイルの末尾）に 1 件を足す
+export function appendToInbox(text, entry) {
+  const src = String(text);
+  const eol = eolOf(src);
+  const lines = src.split(/\r?\n/);
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return [...lines, '', ...String(entry).split('\n'), ''].join(eol);
+}
+
+// タスクファイルを、指令リポジトリのひな形（templates/task.md）から作る。new-task.ps1 と同じ置き換え
+export function renderTask(template, { id, title, project, stage, priority, assignee, source = 'direct', request, now, agent }) {
+  if (!isProjectName(project)) throw new Error('案件を選んでください');
+  if (!STAGES.includes(stage)) throw new Error(`段階が使えません: ${stage}`);
+  if (!PRIORITIES.includes(priority)) throw new Error(`優先度が使えません: ${priority}`);
+  const t = oneLine(title);
+  if (!t) throw new Error('件名が空です');
+  const map = {
+    '{{id}}': id, '{{title}}': t, '{{project}}': project, '{{stage}}': stage, '{{priority}}': priority,
+    '{{source}}': SOURCES.includes(source) ? source : 'direct', '{{assignee}}': oneLine(assignee) || 'any',
+    '{{now}}': now, '{{agent}}': agent, '{{request}}': safeBody(request) || '（依頼の原文をここに写す）',
+  };
+  let out = String(template).replace(/\r\n/g, '\n');
+  if (!out.includes('{{id}}')) throw new Error('ひな形（templates/task.md）の形が想定と違います');
+  for (const [k, v] of Object.entries(map)) out = out.split(k).join(String(v));
+  return out;
+}
+
 // ---- PR のマージ（GitHub だけ。GitLab の MR は対象外） ----
 
 export const MERGE_METHODS = ['merge', 'squash', 'rebase'];

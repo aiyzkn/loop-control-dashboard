@@ -1,6 +1,6 @@
 // loop-control ダッシュボード。
 // ブラウザから GitHub の API（https://api.github.com）を、利用者の fine-grained の個人用トークンで読む。
-// トークンに書き込みの権限があれば、タスクの書き換え・並べ替えを、確認の画面（差分）のあと 1 回 = 1 コミットで書く。
+// トークンに書き込みの権限があれば、タスクの書き換え・並べ替え・依頼の登録を、確認の画面（差分）のあと 1 回 = 1 コミットで書く。
 // このページ（公開）には、データを置かない。読めるかどうかは、トークンの権限（非公開の loop-control を読めるか）で決まる。
 // 表示はすべて textContent と、組み立てた href（github.com / gitlab.com と、このリポジトリの blob だけ）で入れる。
 import {
@@ -11,6 +11,7 @@ import {
 import {
   PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict,
+  normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
 
 const CONFIG = {
@@ -137,6 +138,9 @@ async function load(token) {
     blobs: new Map(entries.filter((e) => e.type === 'blob').map((e) => [e.path, e.sha])),
     texts: new Map(files.tasks.map((p, i) => [p, taskTexts[i]])),
     tasks,
+    inboxPath: files.inbox, inboxText,
+    taskPaths: [...files.tasks, ...files.archived],
+    projectIds: [...projects.keys()].sort(),
   };
   render({
     branch, tasks, pcs, inbox, projects, roster,
@@ -568,6 +572,9 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   // 並べ替え
   renderBoard(open);
 
+  // 依頼の登録
+  renderNewRequest(roster);
+
   // 案件とリポジトリ
   const pj = [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
   $('projects').replaceChildren(pj.length ? el('table', {},
@@ -596,6 +603,76 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     files.inbox ? el('p', {}, link(blobUrl(branch, files.inbox), 'inbox.md を GitHub で開く')) : null,
   );
   $('main').hidden = false;
+}
+
+// ---- 依頼の登録（受付への追記、またはタスクファイルの作成。どちらも 1 コミット） ----
+
+function renderNewRequest(roster) {
+  const box = $('newRequest');
+  if (!ctx.canWrite) {
+    box.replaceChildren(el('p', { class: 'note' }, 'トークンに書き込みの権限が無いので、依頼の登録はできません（README の「使い方」）'));
+    return;
+  }
+  const f = {
+    dest: el('select', { name: 'dest' },
+      el('option', { value: 'inbox' }, '受付（inbox.md）に追記する。エージェントが次の機会にタスクへ起こす'),
+      el('option', { value: 'task' }, 'タスクファイルを直接作る（status: ready ですぐ一覧に出る）')),
+    project: el('select', { name: 'project' }, el('option', { value: '' }, '（選ぶ）'), ...ctx.projectIds.map((p) => el('option', { value: p }, p))),
+    title: el('input', { name: 'title', placeholder: '何をしてほしいか（1 行）', spellcheck: 'false' }),
+    slug: el('input', { name: 'slug', placeholder: '英数字の短い名前（例 ui-audit）', spellcheck: 'false', autocomplete: 'off' }),
+    stage: el('select', { name: 'stage' }, ...STAGES.map((s) => el('option', { value: s }, { propose: '提案だけ（propose）', implement: '実装・PR まで（implement）', merge: 'マージまで（merge）' }[s]))),
+    priority: el('select', { name: 'priority' }, ...PRIORITIES.map((p) => el('option', { value: p }, `${PRIORITY_JA[p]}（${p}）`))),
+    assignee: el('input', { name: 'assignee', value: 'any', spellcheck: 'false', list: 'agentIds' }),
+    body: el('textarea', { name: 'body', rows: '6', placeholder: 'やってほしいこと・完了の条件・やらないこと・参考の場所（自由に。タスクファイルでは「依頼（原文）」に入る）', spellcheck: 'false' }),
+  };
+  f.priority.value = 'normal';
+  const newOpt = el('option', { value: '新規' }, '新規（受付だけ。本文にリポジトリの場所を書く）');
+  f.project.append(newOpt);
+  const agents = el('datalist', { id: 'agentIds' }, ...['any', 'claude', 'copilot', ...roster.map((r) => r.id)].map((v) => el('option', { value: v })));
+  const row = (label, input, sub) => el('label', { class: 'field' }, el('span', {}, label), input, sub ? el('span', { class: 'sub' }, sub) : null);
+  const slugRow = row('短い名前（タスク ID の後半）', f.slug, 'タスクファイルを直接作るときだけ使う。小文字の英数字とハイフン');
+  const sync = () => {
+    const task = f.dest.value === 'task';
+    slugRow.hidden = !task;
+    newOpt.disabled = task;
+    if (task && f.project.value === '新規') f.project.value = '';
+  };
+  f.dest.addEventListener('change', sync);
+  sync();
+  const msg = el('p', { class: 'status', role: 'status' });
+  const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
+  next.addEventListener('click', () => submitNewRequest(f, msg).catch((e) => { msg.className = 'status error'; msg.textContent = e.message || String(e); }));
+  box.replaceChildren(
+    el('p', { class: 'note' }, '依頼を指令リポジトリに書きます。送る前に差分を見せます。緊急（urgent）は、作業中のエージェントが中断して先に行います（AGENTS.md 7.2）。'),
+    agents,
+    el('div', { class: 'fields' },
+      row('書く先', f.dest), row('案件', f.project), row('件名', f.title), slugRow,
+      row('段階', f.stage), row('優先度', f.priority), row('担当（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
+    el('label', { class: 'field' }, el('span', {}, '本文'), f.body),
+    msg, el('div', { class: 'dlg-actions' }, next));
+}
+
+async function submitNewRequest(f, msg) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  msg.className = 'status'; msg.textContent = '';
+  const v = { project: f.project.value, title: f.title.value, stage: f.stage.value, priority: f.priority.value, assignee: f.assignee.value, body: f.body.value };
+  if (f.dest.value === 'inbox') {
+    if (!ctx.inboxPath) throw new Error('指令リポジトリに inbox.md がありません');
+    const entry = inboxEntry(v);
+    const after = appendToInbox(ctx.inboxText, entry);
+    confirmAndSend(`受付への追記の確認: ${v.project}`, [{ path: ctx.inboxPath, before: ctx.inboxText, after }],
+      commitMessage(ctx.login, `受付に追記 ${v.project}: ${v.title}`.slice(0, 100)));
+    return;
+  }
+  const slug = normalizeSlug(f.slug.value);
+  if (!slug) throw new Error('短い名前（英数字）を入れてください');
+  f.slug.value = slug;
+  const prefix = `projects/${v.project}/`;
+  const ids = ctx.taskPaths.filter((p) => p.startsWith(prefix)).map((p) => p.split('/').pop().replace(/\.md$/, ''));
+  const id = newTaskId(slug, ids);
+  const tpl = (await gh(ctx.token, `${REPO()}/contents/templates/task.md?ref=${ctx.head.sha}`, { raw: true })).body;
+  const text = renderTask(tpl, { ...v, id, source: 'direct', request: v.body, now: isoLocal(), agent: WHO() });
+  confirmAndSend(`タスクの作成の確認: ${id}`, [{ path: `${prefix}tasks/${id}.md`, before: '', after: text }], commitMessage(ctx.login, '起票', [id]));
 }
 
 function editButton(t) {
