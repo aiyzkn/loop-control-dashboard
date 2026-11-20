@@ -787,6 +787,7 @@ function renderVisuals({ open, files, projects, branch, now }) {
 // ---- ガントチャート ----
 
 const GANTT_DAYS = 14;
+const GANTT_LIMIT = 20;           // 最初に出す行の数（新しい順）。「すべて表示」で残りを開く（ブラウザに覚える）
 const GANTT_ARCHIVE_MAX = 40;    // 完了を読むのは、ID の日付が窓より 14 日前までのものを、新しい順にこの数まで
 let archivedCache = null;        // 読んだ完了のタスク（読み込みのたびに消す）
 
@@ -794,7 +795,9 @@ function ganttBlock({ open, files, branch, now }) {
   const box = el('div', {});
   const win = dayWindow(GANTT_DAYS, now);
   const draw = () => {
-    const rows = ganttRows([...open, ...(archivedCache || [])], win.from, win.to);
+    const allRows = ganttRows([...open, ...(archivedCache || [])], win.from, win.to);
+    const showAll = !!prefs.get('ganttAll');
+    const rows = showAll ? allRows : allRows.slice(0, GANTT_LIMIT);
     const LABEL = 220, W = 960, ROW = 22, TOP = 20;
     const X = (f) => LABEL + f * (W - LABEL - 8);
     const H = TOP + rows.length * ROW + 4;
@@ -817,7 +820,7 @@ function ganttBlock({ open, files, branch, now }) {
     });
     const nowX = X(1);
     const chart = rows.length
-      ? svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'gantt', role: 'img', 'aria-label': `ガントチャート: ${rows.length} 件` }, ...ticks, ...bars,
+      ? svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'gantt', role: 'img', 'aria-label': `ガントチャート: ${allRows.length} 件のうち ${rows.length} 件` }, ...ticks, ...bars,
         svg('line', { x1: nowX, y1: TOP - 4, x2: nowX, y2: H, class: 'gantt-now' }))
       : el('p', { class: 'note' }, `直近 ${GANTT_DAYS} 日に掛かるタスクはありません`);
     const legend = el('div', { class: 'legend' }, ...OPEN_STATUSES.map((s) => el('span', {}, el('i', { class: `key st-${s}` }), STATUS_JA[s])),
@@ -835,7 +838,13 @@ function ganttBlock({ open, files, branch, now }) {
         } catch (e) { more.disabled = false; more.textContent = `読めませんでした（${e.status || e.message}）。もう一度`; }
       });
     }
-    box.replaceChildren(...[legend, more ? el('p', {}, more) : null, el('div', { class: 'scroll' }, chart)].filter(Boolean));
+    let toggle = null;
+    if (allRows.length > GANTT_LIMIT) {
+      toggle = el('button', { type: 'button', class: 'mini gantt-toggle' }, showAll ? `新しい ${GANTT_LIMIT} 件だけにする` : `すべて表示（残り ${allRows.length - GANTT_LIMIT} 件）`);
+      toggle.addEventListener('click', () => { prefs.set('ganttAll', !showAll); draw(); });
+    }
+    const count = el('span', { class: 'sub' }, allRows.length > GANTT_LIMIT ? `${allRows.length} 件のうち${showAll ? 'すべて' : `新しい ${rows.length} 件`}（進行中・待ちが先）` : `${allRows.length} 件`);
+    box.replaceChildren(...[legend, more ? el('p', {}, more) : null, el('div', { class: 'scroll' }, chart), el('p', { class: 'gantt-foot' }, count, toggle ? ' ' : null, toggle)].filter(Boolean));
   };
   draw();
   return box;

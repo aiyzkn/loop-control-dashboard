@@ -108,7 +108,7 @@ export function dayWindow(days, now = Date.now()) {
 
 // ガントチャートの行。tasks = parseTask の形（完了したものは archived: true・status: done など）。
 // 始まり = created、終わり = 完了したものは updated、進行中は now。窓（from〜to）に掛からないものは除く。
-// x0・x1 は窓の中の位置（0〜1）。clipped は始まりが窓より前。並びは 進行中が先 → 始まりの古い順
+// x0・x1 は窓の中の位置（0〜1）。clipped は始まりが窓より前。並びは 進行中が先（起票の新しい順）→ 完了（終わりの新しい順）。先頭から切れば「新しい順に n 件」になる
 export function ganttRows(tasks, from, to) {
   const span = Math.max(to - from, 1);
   const rows = [];
@@ -127,7 +127,7 @@ export function ganttRows(tasks, from, to) {
       hb: !doneLike && !Number.isNaN(hb) && hb >= from && hb <= to ? (hb - from) / span : null,
     });
   }
-  return rows.sort((a, b) => Number(a.done) - Number(b.done) || a.start - b.start || String(a.id).localeCompare(String(b.id)));
+  return rows.sort((a, b) => Number(a.done) - Number(b.done) || (a.done ? b.end - a.end : b.start - a.start) || String(a.id).localeCompare(String(b.id)));
 }
 
 // 案件ごと・日ごとの起票の数（タスク ID の日付で数える。tasks と archive）。{ projects: [...], days, values: { 案件: [日ごとの数] } }
