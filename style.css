@@ -247,3 +247,17 @@ svg.ribbon-chart { width: 100%; min-width: 560px; height: auto; display: block; 
 .ribbon-bar { stroke: var(--bg); stroke-width: 1; }
 .ribbon:hover { opacity: 0.6; }
 .ribbon-label { fill: var(--fg); font-size: 11px; }
+
+/* ---- GitHub の芝（緑の 1 つの色相の段階。明暗それぞれ） ---- */
+:root { --cg-0: #ebedf0; --cg-1: #9be9a8; --cg-2: #40c463; --cg-3: #30a14e; --cg-4: #216e39; }
+@media (prefers-color-scheme: dark) {
+  :root { --cg-0: #161b22; --cg-1: #0e4429; --cg-2: #006d32; --cg-3: #26a641; --cg-4: #39d353; }
+}
+.cg-0 { fill: var(--cg-0); background: var(--cg-0); } .cg-1 { fill: var(--cg-1); background: var(--cg-1); } .cg-2 { fill: var(--cg-2); background: var(--cg-2); }
+.cg-3 { fill: var(--cg-3); background: var(--cg-3); } .cg-4 { fill: var(--cg-4); background: var(--cg-4); }
+rect.cg { stroke: var(--line); stroke-width: 0.5; }
+.contrib .legend { align-items: center; gap: 4px; }
+.contrib-row { margin: 8px 0 12px; }
+.contrib-name { font-weight: 600; }
+.contrib-svg { display: block; max-width: none; }
+.contrib-svg .axis { fill: var(--muted); font-size: 9px; }

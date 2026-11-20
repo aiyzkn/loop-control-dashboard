@@ -171,3 +171,38 @@ export function cumulative(series) {
   for (const p of series.projects) { let a = 0; values[p] = series.values[p].map((v) => (a += v)); }
   return { ...series, values };
 }
+
+// ---- GitHub の芝（貢献のカレンダー） ----
+
+// GraphQL の contributionCalendar.weeks を、日の並び [{ date, count }] にする
+export function calendarDays(weeks) {
+  return (weeks || []).flatMap((w) => (w.contributionDays || []).map((d) => ({ date: d.date, count: d.contributionCount || 0 })));
+}
+
+// 複数の日の並びを、日付ごとに足す（組織の行 = メンバーの組織内の貢献の合計）
+export function sumDays(lists) {
+  const map = new Map();
+  for (const list of lists) for (const d of list) map.set(d.date, (map.get(d.date) || 0) + d.count);
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, count]) => ({ date, count }));
+}
+
+// 濃さの段階（0〜4）。0 件は 0、ほかは 0 でない日の四分位で 1〜4（行ごとに決める）
+export function levelScale(days) {
+  const v = days.map((d) => d.count).filter((c) => c > 0).sort((a, b) => a - b);
+  if (!v.length) return () => 0;
+  const q = (p) => v[Math.min(v.length - 1, Math.floor(p * v.length))];
+  const [q1, q2, q3] = [q(0.25), q(0.5), q(0.75)];
+  return (c) => (c <= 0 ? 0 : c <= q1 ? 1 : c <= q2 ? 2 : c <= q3 ? 3 : 4);
+}
+
+// 升目の位置。列 = 週（最初の日の週を 0）、行 = 曜日（日曜 = 0）。日付は YYYY-MM-DD（UTC で数える）
+export function gridCells(days) {
+  if (!days.length) return [];
+  const t0 = Date.parse(days[0].date + 'T00:00:00Z');
+  const w0 = new Date(t0).getUTCDay();
+  const level = levelScale(days);
+  return days.map((d) => {
+    const i = Math.round((Date.parse(d.date + 'T00:00:00Z') - t0) / 86400000) + w0;
+    return { ...d, col: Math.floor(i / 7), row: i % 7, level: level(d.count) };
+  });
+}

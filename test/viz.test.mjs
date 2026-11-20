@@ -108,3 +108,26 @@ test('cumulative は日ごとの数を累計にする', () => {
   const r = ribbonLayout(c);
   assert.equal(r.columns[1].segs.length, 1);
 });
+
+import { calendarDays, sumDays, levelScale, gridCells } from '../viz.js';
+
+test('calendarDays・sumDays は日の並びにし、日付ごとに足す', () => {
+  const a = calendarDays([{ contributionDays: [{ date: '2026-11-01', contributionCount: 1 }, { date: '2026-11-02', contributionCount: 0 }] }]);
+  const b = calendarDays([{ contributionDays: [{ date: '2026-11-02', contributionCount: 3 }] }]);
+  assert.deepEqual(sumDays([a, b]), [{ date: '2026-11-01', count: 1 }, { date: '2026-11-02', count: 3 }]);
+  assert.deepEqual(calendarDays(null), []);
+});
+
+test('levelScale は 0 を 0、ほかを四分位で 1〜4', () => {
+  const f = levelScale([0, 1, 2, 3, 4, 5, 6, 7, 8].map((count) => ({ count })));
+  assert.equal(f(0), 0); assert.equal(f(1), 1); assert.equal(f(8), 4);
+  assert.equal(levelScale([{ count: 0 }])(5), 0);
+});
+
+test('gridCells は週を列、曜日を行にする', () => {
+  // 2026-11-01 は日曜
+  const c = gridCells([{ date: '2026-11-01', count: 1 }, { date: '2026-11-07', count: 0 }, { date: '2026-11-08', count: 2 }]);
+  assert.deepEqual(c.map((x) => [x.col, x.row]), [[0, 0], [0, 6], [1, 0]]);
+  const d = gridCells([{ date: '2026-11-03', count: 1 }]);   // 火曜から始まる
+  assert.deepEqual([d[0].col, d[0].row], [0, 2]);
+});
