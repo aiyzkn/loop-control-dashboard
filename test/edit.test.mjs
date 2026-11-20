@@ -257,3 +257,12 @@ test('taskForPr は PR を成果物に持つタスクを、進行中・待ちを
   assert.equal(taskForPr(tasks, 'https://github.com/o/r/pull/1', (t) => t.prs).id, 'now');
   assert.equal(taskForPr(tasks, 'https://github.com/o/r/pull/9', (t) => t.prs), null);
 });
+
+test('mergeVerdict はアカウントに書き込みの権限が無ければ止め、理由に書く', () => {
+  const pr = { state: 'open', merged: false, draft: false, mergeable: true, mergeable_state: 'clean' };
+  assert.equal(mergeVerdict(pr, null).ok, true);
+  assert.equal(mergeVerdict(pr, null, { canPush: true }).ok, true);
+  const v = mergeVerdict(pr, null, { canPush: false, login: 'yzknai', repo: 'aiyzkn/kit' });
+  assert.equal(v.ok, false); assert.equal(v.noAccess, true);
+  assert.match(v.reasons[0], /yzknai は aiyzkn\/kit に書き込めません（アカウントの権限/);
+});

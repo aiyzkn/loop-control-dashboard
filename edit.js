@@ -312,7 +312,9 @@ export function summarizeChecks(checkRuns, status) {
 }
 
 // マージしてよいか（画面で止める理由）。pr = GET /repos/{o}/{r}/pulls/{n} の結果
-export function mergeVerdict(pr, checks) {
+// access = { canPush, login, repo }。canPush が false なら、アカウント（トークンの持ち主）にそのリポジトリへの書き込みの権限が無い。
+// fine-grained のトークンは、持ち主の権限を超えられないので、トークンを直しても足りない
+export function mergeVerdict(pr, checks, access = {}) {
   const reasons = [];
   if (!pr) return { ok: false, reasons: ['PR を読めません'] };
   if (pr.merged) return { ok: false, merged: true, reasons: ['マージ済みです'] };
@@ -324,7 +326,8 @@ export function mergeVerdict(pr, checks) {
   if (pr.mergeable_state === 'behind') reasons.push('基準ブランチより遅れています（保護の設定で、最新化が要ります）');
   if (checks && checks.state === 'failure') reasons.push(`検査が失敗しています: ${checks.failed.join('、')}`);
   if (checks && checks.state === 'pending') reasons.push('検査が終わっていません');
-  return { ok: reasons.length === 0, reasons };
+  if (access.canPush === false) reasons.push(`${access.login || 'このアカウント'} は ${access.repo || 'このリポジトリ'} に書き込めません（アカウントの権限。トークンでは足せません）。「GitHub で開く」から、書き込めるアカウントでマージしてください`);
+  return { ok: reasons.length === 0, reasons, ...(access.canPush === false ? { noAccess: true } : {}) };
 }
 
 // ---- 未マージの PR の一覧 ----

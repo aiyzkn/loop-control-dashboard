@@ -1117,7 +1117,13 @@ function renderOpenPrs({ tasks, projects }) {
 async function fetchOpenPrs(repos) {
   const out = await mapLimit(repos, 4, async (r) => {
     const res = await gh(ctx.token, `/repos/${r.owner}/${encodeURIComponent(r.repo)}/pulls?state=open&per_page=50&sort=updated&direction=desc`, { allow404: true });
-    return { ...r, prs: res.body ? res.body : null, status: res.status };
+    // 開いている PR があるリポジトリだけ、アカウントの書き込みの権限も読む（無ければ、ここからはマージできない）
+    let canPush;
+    if (res.body && res.body.length) {
+      const info = await gh(ctx.token, `/repos/${r.owner}/${encodeURIComponent(r.repo)}`, { allow404: true });
+      if (info.body && info.body.permissions) canPush = !!info.body.permissions.push;
+    }
+    return { ...r, prs: res.body ? res.body : null, status: res.status, canPush };
   });
   return { repos: out };
 }
@@ -1130,7 +1136,9 @@ function drawOpenPrs(box, tasks, projects) {
   const unreadable = openPrsCache.repos.filter((r) => !r.prs);
   const reload = el('button', { type: 'button', class: 'mini' }, '読み直す');
   reload.addEventListener('click', () => { openPrsCache = null; renderOpenPrs({ tasks, projects }); });
+  const noPush = openPrsCache.repos.filter((r) => r.canPush === false && r.prs && r.prs.length).map((r) => r.full);
   const head = el('p', { class: 'sub' }, `${openPrsCache.repos.length - unreadable.length} のリポジトリに、開いている PR が ${rows.length} 件`, ' ', reload);
+  const pushNote = noPush.length ? el('p', { class: 'sub warn-text' }, `${ctx.login} が書き込めないリポジトリ（ここからはマージできない。トークンではなくアカウントの権限）: ${noPush.join('、')}。「開く」「URL」から、書き込めるアカウントで GitHub を開いてください`) : null;
   const table = rows.length ? el('div', { class: 'scroll' }, el('table', { class: 'open-prs' },
     el('thead', {}, el('tr', {}, ...['リポジトリ', 'PR', '作成', 'ブランチ', '更新', 'タスク', '操作'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows.map(({ r, p }) => {
@@ -1146,10 +1154,11 @@ function drawOpenPrs(box, tasks, projects) {
         el('td', { class: 'sub' }, `${p.base ? p.base.ref : '?'} ← ${p.head ? p.head.ref : '?'}`),
         el('td', {}, ageText(p.updated_at)),
         el('td', {}, t ? link(blobUrl(view.branch, t.path), t.id) : el('span', { class: 'sub' }, '—')),
-        el('td', {}, btn));
+        el('td', {}, el('span', { class: 'pr-actions' }, btn, prPageButtons(x, true)),
+          r.canPush === false ? el('div', { class: 'sub warn-text', title: `${ctx.login} はこのリポジトリに書き込めないので、ここからはマージできません（アカウントの権限）。「開く」「URL」から、書き込めるアカウントで GitHub で開いてください` }, `${ctx.login} は書き込めない`) : null));
     })))) : el('p', { class: 'note' }, '開いている PR はありません');
   const note = unreadable.length ? el('p', { class: 'sub' }, `読めないリポジトリ（トークンの対象に入っていない・権限が無い）: ${unreadable.map((r) => `${r.full}（${r.status}）`).join('、')}`) : null;
-  box.replaceChildren(...[head, table, note].filter(Boolean));
+  box.replaceChildren(...[head, pushNote, table, note].filter(Boolean));
 }
 
 function editButton(t) {
@@ -1164,7 +1173,27 @@ function editButton(t) {
 function mergeButton(t, x) {
   const b = el('button', { type: 'button', class: 'mini', title: `${x.label} の状態を見て、マージする`, 'aria-label': `${x.label} の状態を見る` }, '状態・マージ');
   b.addEventListener('click', () => openMerge(t, x));
-  return b;
+  return el('span', { class: 'pr-actions' }, b, prPageButtons(x, true));
+}
+
+// PR のページを GitHub で開くボタンと、URL を写すボタン（このページのトークンのアカウントでマージできないとき、
+// 別の端末・別のアカウントで開くため）。compact は表の中の小さな形
+function prPageButtons(x, compact = false) {
+  const open = el('a', { href: x.url, class: 'btn-link' + (compact ? ' mini' : ''), title: `${x.label} を GitHub で開く（新しいタブ）` }, compact ? '開く' : 'GitHub で開く');
+  const copy = el('button', { type: 'button', class: compact ? 'mini' : '', title: `${x.label} の URL を写す（別の端末で開くため）` }, compact ? 'URL' : 'URL を写す');
+  copy.addEventListener('click', async () => {
+    const label = copy.textContent;
+    let ok = false;
+    try { await navigator.clipboard.writeText(x.url); ok = true; } catch { }
+    if (!ok) {
+      // クリップボードが使えない環境（http・権限なし）では、URL を選んだ状態で見せる
+      window.prompt('URL を写してください', x.url);
+      return;
+    }
+    copy.textContent = '写しました';
+    setTimeout(() => { copy.textContent = label; }, 1500);
+  });
+  return el('span', { class: 'pr-page' }, open, copy);
 }
 
 // PR の状態・検査を読み、確認のあとマージする。マージしたら、タスクのログに 1 行（1 コミット）
@@ -1181,8 +1210,14 @@ async function openMerge(t, x) {
   const api = `/repos/${pr.owner}/${pr.repo}`;
   let info;
   let checks = null;
+  let canPush;   // アカウント（トークンの持ち主）に、このリポジトリへの書き込みの権限があるか（読めなければ undefined）
   try {
-    info = (await gh(ctx.token, `${api}/pulls/${pr.number}`)).body;
+    const [pull, repoInfo] = await Promise.all([
+      gh(ctx.token, `${api}/pulls/${pr.number}`),
+      gh(ctx.token, api, { allow404: true }),
+    ]);
+    info = pull.body;
+    if (repoInfo.body && repoInfo.body.permissions) canPush = !!repoInfo.body.permissions.push;
     if (!info.merged && info.head && info.head.sha) {
       const sha = info.head.sha;
       const [runs, status] = await Promise.all([
@@ -1196,9 +1231,10 @@ async function openMerge(t, x) {
     msg.textContent = e.status === 404 || e.status === 403
       ? `${pr.owner}/${pr.repo} の PR を読めません（${e.status}）。トークンの対象リポジトリに ${pr.owner}/${pr.repo} を入れ、Pull requests の権限を付けてください`
       : (e.message || String(e));
+    dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), msg, el('div', { class: 'dlg-actions' }, cancel, prPageButtons(x)));
     return;
   }
-  const v = mergeVerdict(info, checks);
+  const v = mergeVerdict(info, checks, { canPush, login: ctx.login, repo: `${pr.owner}/${pr.repo}` });
   const CHECK_JA = { success: '成功', failure: '失敗あり', pending: '終わっていない', none: '検査なし（または読めない）' };
   const facts = el('dl', { class: 'facts' },
     el('dt', {}, '件名'), el('dd', {}, link(x.url, info.title || x.label)),
@@ -1225,7 +1261,10 @@ async function openMerge(t, x) {
       msg.className = 'status error';
       msg.textContent = e.status === 409 ? '見た後に PR の内容が変わりました。閉じて開き直してください'
         : e.status === 405 ? `マージできませんでした（405${e.detail ? `: ${e.detail}` : ''}）`
-          : e.status === 403 || e.status === 404 ? `マージの権限がありません（${e.status}）。トークンに ${pr.owner}/${pr.repo} の Contents と Pull requests の Read and write が要ります`
+          : e.status === 403 || e.status === 404
+            ? (canPush === false
+              ? `マージできません（${e.status}）。${ctx.login} は ${pr.owner}/${pr.repo} に書き込めません（アカウントの権限。トークンでは足せません）。「GitHub で開く」から、書き込めるアカウントでマージしてください`
+              : `マージできません（${e.status}）。${ctx.login} のアカウントには書き込みの権限がありますが、トークンで断られました。トークンの対象リポジトリに ${pr.owner}/${pr.repo} を入れ、Contents: Read and write を付けてください（組織の承認待ちのトークンも断られます）`)
             : (e.message || String(e));
       return;
     }
@@ -1250,7 +1289,7 @@ async function openMerge(t, x) {
     el('p', { class: 'sub' }, t
       ? `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`
       : '関係するタスクが見つかりません（タスクの成果物に、この PR の URL が書かれていない）。マージしてもタスクのログには残りません')),
-  msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go));
+  msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go, prPageButtons(x)));
 }
 
 function showError(e) {
