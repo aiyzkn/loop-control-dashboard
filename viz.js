@@ -206,3 +206,30 @@ export function gridCells(days) {
     return { ...d, col: Math.floor(i / 7), row: i % 7, level: level(d.count) };
   });
 }
+
+// 時間の軸の目盛り。from〜to の間に、1 日の窓は 3 時間ごと、それ以外は 1 日ごとの線を引き、
+// 文字は 1 日 = 3 時間ごと、7 日以下 = 毎日、14 日以下 = 1 日おき（今日を含む側に揃える）、それより長い = 5 日ごと。
+// 返すのは [{ t, f（0〜1）, label（無ければ ''） }]
+export function timeTicks(from, to, days) {
+  const span = Math.max(to - from, 1);
+  const out = [];
+  if (days <= 1) {
+    const d0 = new Date(from);
+    for (let h = 0; h <= 24; h += 3) {
+      const t = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), h).getTime();
+      if (t > to) break;
+      out.push({ t, f: (t - from) / span, label: `${h}時` });
+    }
+    return out;
+  }
+  const d0 = new Date(from);
+  const step = days <= 7 ? 1 : days <= 14 ? 2 : 5;
+  for (let i = 0; i < days; i++) {
+    const d = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + i);
+    const t = d.getTime();
+    if (t > to) break;
+    const fromEnd = days - 1 - i;
+    out.push({ t, f: (t - from) / span, label: fromEnd % step === 0 ? `${d.getMonth() + 1}/${d.getDate()}` : '' });
+  }
+  return out;
+}
