@@ -326,3 +326,31 @@ export function mergeVerdict(pr, checks) {
   if (checks && checks.state === 'pending') reasons.push('検査が終わっていません');
   return { ok: reasons.length === 0, reasons };
 }
+
+// ---- 未マージの PR の一覧 ----
+
+// 案件の「リポジトリ」の表から、GitHub のリポジトリを重ねずに集める。[{ owner, repo, full, projects: [案件…] }]（名前の順）
+export function githubRepos(projects) {
+  const map = new Map();
+  for (const p of projects) {
+    for (const r of p.repos || []) {
+      if (String(r.host).toLowerCase() !== 'github.com') continue;
+      const m = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/.exec(String(r.repo || ''));
+      if (!m || /^\.+$/.test(m[2])) continue;
+      const full = `${m[1]}/${m[2]}`;
+      const key = full.toLowerCase();
+      if (!map.has(key)) map.set(key, { owner: m[1], repo: m[2], full, projects: [] });
+      const e = map.get(key);
+      if (!e.projects.includes(p.id)) e.projects.push(p.id);
+    }
+  }
+  return [...map.values()].sort((a, b) => a.full.localeCompare(b.full));
+}
+
+// PR の URL に関係するタスク（成果物・現在地にその PR が書かれているもの）。進行中・待ちを先に、無ければ null。
+// prsOf(t) = そのタスクの PR の URL の一覧（app.js が findPullRequests で作る）
+export function taskForPr(tasks, url, prsOf) {
+  const u = String(url).toLowerCase();
+  const hit = tasks.filter((t) => prsOf(t).some((x) => String(x).toLowerCase() === u));
+  return hit.find((t) => ['doing', 'waiting', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
+}
