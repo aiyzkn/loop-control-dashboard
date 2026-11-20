@@ -13,7 +13,8 @@ import {
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
-import { OPEN_STATUSES, projectSummary, matrix, shade, squarify } from './viz.js';
+import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
+  calendarDays, sumDays, gridCells } from './viz.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -133,6 +134,8 @@ async function load(token) {
   const inbox = parseInbox(inboxText);
   const roster = parseRoster(rosterText);
   // 書き込みに使う、読んだ時点の状態
+  archivedCache = null;   // ガントチャートの完了は、読み込みのたびに読み直す（ボタンで）
+  contribCache = null;    // GitHub の芝も、読み込みのたびに（ビジュアルの節を開いたときに）読み直す
   ctx = {
     token, login: me.login, branch, head,
     canWrite: !!(repoInfo.permissions && repoInfo.permissions.push),
@@ -775,7 +778,210 @@ function renderVisuals({ open, files, projects, branch, now }) {
     el('div', { class: 'viz-block' }, el('h3', {}, 'カード（案件ごと）'), projectCards(rows, projLink, now)),
     el('div', { class: 'viz-block' }, el('h3', {}, 'マトリックス（案件 × 状態・優先度）'), taskMatrix(open, rows, projLink)),
     el('div', { class: 'viz-block' }, el('h3', {}, 'ツリーマップ（案件の大きさ = タスクの数。中は状態と完了）'), treemap(rows)),
+    el('div', { class: 'viz-block' }, el('h3', {}, `ガントチャート（直近 ${GANTT_DAYS} 日。起票から今・完了まで）`), ganttBlock({ open, files, branch, now })),
+    el('div', { class: 'viz-block' }, el('h3', {}, `リボンチャート（直近 ${RIBBON_DAYS} 日の起票の累計。日ごとに多い案件が上）`), ribbonChart(files, now)),
+    el('div', { class: 'viz-block' }, el('h3', {}, `GitHub の芝（組織 ${CONFIG.org} とメンバー。直近 1 年）`), contribBlock()),
   );
+}
+
+// ---- ガントチャート ----
+
+const GANTT_DAYS = 14;
+const GANTT_ARCHIVE_MAX = 40;    // 完了を読むのは、ID の日付が窓より 14 日前までのものを、新しい順にこの数まで
+let archivedCache = null;        // 読んだ完了のタスク（読み込みのたびに消す）
+
+function ganttBlock({ open, files, branch, now }) {
+  const box = el('div', {});
+  const win = dayWindow(GANTT_DAYS, now);
+  const draw = () => {
+    const rows = ganttRows([...open, ...(archivedCache || [])], win.from, win.to);
+    const LABEL = 220, W = 960, ROW = 22, TOP = 20;
+    const X = (f) => LABEL + f * (W - LABEL - 8);
+    const H = TOP + rows.length * ROW + 4;
+    const ticks = win.days.map((d, i) => {
+      const x = X(i / GANTT_DAYS);
+      return svg('g', {}, svg('line', { x1: x.toFixed(1), y1: TOP - 4, x2: x.toFixed(1), y2: H, class: 'grid' }),
+        i % 2 === (GANTT_DAYS - 1) % 2 ? svg('text', { x: (x + 2).toFixed(1), y: 12, class: 'axis' }, `${Number(d.slice(4, 6))}/${Number(d.slice(6))}`) : null);
+    });
+    const bars = rows.map((r, i) => {
+      const y = TOP + i * ROW;
+      const x0 = X(r.x0), x1 = Math.max(X(r.x1), X(r.x0) + 4);
+      const tip = `${r.project} / ${r.title || r.id}（${r.done ? (r.status === 'dropped' ? '取りやめ' : '完了') : STATUS_JA[r.status] || r.status}）\n${new Date(r.start).toLocaleString()} 〜 ${r.done ? new Date(r.end).toLocaleString() : '今'}`;
+      return svg('g', { class: 'gantt-row' },
+        svg('title', {}, tip),
+        svg('rect', { x: 0, y, width: W, height: ROW, class: 'gantt-hit' }),
+        svg('text', { x: 4, y: y + 15, class: 'gantt-label' }, truncate(`${r.project} / ${r.title || r.id}`, 30)),
+        svg('rect', { x: x0.toFixed(1), y: y + 5, width: (x1 - x0).toFixed(1), height: ROW - 10, rx: 3, class: r.done ? 'seg done gantt-bar' : `seg st-${r.status} gantt-bar` }),
+        r.clipped ? svg('text', { x: (x0 + 2).toFixed(1), y: y + 15, class: 'gantt-clip' }, '‹') : null,
+        r.hb != null ? svg('circle', { cx: X(r.hb).toFixed(1), cy: y + ROW / 2, r: 3, class: 'gantt-hb' }, svg('title', {}, '最後の印（heartbeat）')) : null);
+    });
+    const nowX = X(1);
+    const chart = rows.length
+      ? svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'gantt', role: 'img', 'aria-label': `ガントチャート: ${rows.length} 件` }, ...ticks, ...bars,
+        svg('line', { x1: nowX, y1: TOP - 4, x2: nowX, y2: H, class: 'gantt-now' }))
+      : el('p', { class: 'note' }, `直近 ${GANTT_DAYS} 日に掛かるタスクはありません`);
+    const legend = el('div', { class: 'legend' }, ...OPEN_STATUSES.map((s) => el('span', {}, el('i', { class: `key st-${s}` }), STATUS_JA[s])),
+      el('span', {}, el('i', { class: 'key done' }), '完了'), el('span', {}, el('i', { class: 'key hb' }), '最後の印'));
+    const cand = archivedCandidates(files.archived, win);
+    let more = null;
+    if (archivedCache === null && cand.length) {
+      more = el('button', { type: 'button', class: 'mini' }, `完了したタスクも読む（${cand.length} 件。API を ${cand.length} 回）`);
+      more.addEventListener('click', async () => {
+        more.disabled = true; more.textContent = '読んでいます…';
+        try {
+          const texts = await mapLimit(cand, 6, (p) => gh(ctx.token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${ctx.head.sha}`, { raw: true }).then((r) => r.body));
+          archivedCache = cand.map((p, i) => parseTask(p, texts[i]));
+          draw();
+        } catch (e) { more.disabled = false; more.textContent = `読めませんでした（${e.status || e.message}）。もう一度`; }
+      });
+    }
+    box.replaceChildren(...[legend, more ? el('p', {}, more) : null, el('div', { class: 'scroll' }, chart)].filter(Boolean));
+  };
+  draw();
+  return box;
+}
+
+// 完了（archive）のうち、ID の日付が窓の始まりの 14 日前以降のものを、新しい順に
+function archivedCandidates(paths, win) {
+  const from = new Date(win.from - GANTT_DAYS * 24 * 3600 * 1000);
+  const min = `${from.getFullYear()}${String(from.getMonth() + 1).padStart(2, '0')}${String(from.getDate()).padStart(2, '0')}`;
+  return paths.filter((p) => { const m = /\/archive\/(\d{8})-/.exec(p); return m && m[1] >= min; })
+    .sort((a, b) => b.split('/').pop().localeCompare(a.split('/').pop())).slice(0, GANTT_ARCHIVE_MAX);
+}
+
+const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+// ---- リボンチャート ----
+
+const RIBBON_DAYS = 14;
+const RIBBON_TOP = 7;            // 名前を出す案件の数。ほかは「その他」にまとめる
+// 案件の色（dataviz の既定の分類の色。明暗それぞれ検査済み）。色は案件の名前の順で決め、順位では変えない
+const RIBBON_SLOTS = 7;
+
+function ribbonChart(files, now) {
+  const win = dayWindow(RIBBON_DAYS, now);
+  const raw = createdSeries([...files.tasks, ...files.archived], win.days);
+  if (!raw.projects.length) return el('p', { class: 'note' }, `直近 ${RIBBON_DAYS} 日の起票はありません`);
+  // 上位 RIBBON_TOP 件のほかは「その他」
+  const named = raw.projects.slice(0, RIBBON_TOP);
+  const values = Object.fromEntries(named.map((p) => [p, raw.values[p]]));
+  const rest = raw.projects.slice(RIBBON_TOP);
+  if (rest.length) values['その他'] = win.days.map((_, i) => rest.reduce((a, p) => a + raw.values[p][i], 0));
+  const series = { projects: [...named, ...(rest.length ? ['その他'] : [])], days: win.days, values };
+  const colorOf = new Map([...named].sort().map((p, i) => [p, `cat-${(i % RIBBON_SLOTS) + 1}`]));
+  colorOf.set('その他', 'cat-other');
+  const lay = ribbonLayout(cumulative(series));
+  const W = 960, H = 260, TOP = 8, BOTTOM = 22, LEFT = 4, RIGHT = 120;
+  const n = win.days.length;
+  const colW = (W - LEFT - RIGHT) / n;
+  const barW = Math.min(colW * 0.42, 28);
+  const cx = (i) => LEFT + colW * i + colW / 2;
+  const Y = (f) => TOP + f * (H - TOP - BOTTOM);
+  const parts = [];
+  // 帯（隣の期間の同じ案件を結ぶ）。帯を先に、棒を上に描く
+  for (let i = 0; i < n - 1; i++) {
+    const a = lay.columns[i], b = lay.columns[i + 1];
+    for (const sa of a.segs) {
+      const sb = b.segs.find((s) => s.project === sa.project);
+      if (!sb) continue;
+      const x0 = cx(i) + barW / 2, x1 = cx(i + 1) - barW / 2, xm = (x0 + x1) / 2;
+      const d = `M${x0.toFixed(1)},${Y(sa.y0).toFixed(1)} C${xm.toFixed(1)},${Y(sa.y0).toFixed(1)} ${xm.toFixed(1)},${Y(sb.y0).toFixed(1)} ${x1.toFixed(1)},${Y(sb.y0).toFixed(1)}`
+        + ` L${x1.toFixed(1)},${Y(sb.y1).toFixed(1)} C${xm.toFixed(1)},${Y(sb.y1).toFixed(1)} ${xm.toFixed(1)},${Y(sa.y1).toFixed(1)} ${x0.toFixed(1)},${Y(sa.y1).toFixed(1)} Z`;
+      parts.push(svg('path', { d, class: `ribbon ${colorOf.get(sa.project)}` }, svg('title', {}, `${sa.project}: 累計 ${dayLabel(win.days[i])} ${sa.value} 件 → ${dayLabel(win.days[i + 1])} ${sb.value} 件`)));
+    }
+  }
+  lay.columns.forEach((c, i) => {
+    for (const s of c.segs) {
+      const y0 = Y(s.y0) + 1, y1 = Y(s.y1) - 1;
+      parts.push(svg('rect', { x: (cx(i) - barW / 2).toFixed(1), y: y0.toFixed(1), width: barW.toFixed(1), height: Math.max(y1 - y0, 1).toFixed(1), rx: 2, class: `ribbon-bar ${colorOf.get(s.project)}` },
+        svg('title', {}, `${dayLabel(win.days[i])} ${s.project}: 累計 ${s.value} 件（${s.rank + 1} 位）`)));
+    }
+    if (i % 2 === (n - 1) % 2) parts.push(svg('text', { x: cx(i).toFixed(1), y: H - 6, class: 'axis', 'text-anchor': 'middle' }, dayLabel(win.days[i])));
+  });
+  // 直接のラベル: 最後に値のある期間の右に、案件の名前（色だけに頼らない）
+  for (const p of series.projects) {
+    let last = -1;
+    for (let i = n - 1; i >= 0; i--) if (lay.columns[i].segs.some((s) => s.project === p)) { last = i; break; }
+    if (last !== n - 1) continue;
+    const s = lay.columns[last].segs.find((x) => x.project === p);
+    if (Y(s.y1) - Y(s.y0) < 10) continue;
+    parts.push(svg('text', { x: (cx(last) + barW / 2 + 4).toFixed(1), y: ((Y(s.y0) + Y(s.y1)) / 2 + 4).toFixed(1), class: 'ribbon-label' }, truncate(p, 16)));
+  }
+  const legend = el('div', { class: 'legend' }, ...series.projects.map((p) => el('span', {}, el('i', { class: `key ${colorOf.get(p)}` }), p)));
+  return el('div', {}, legend, el('div', { class: 'scroll' }, svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'ribbon-chart', role: 'img', 'aria-label': `直近 ${RIBBON_DAYS} 日の案件ごとの起票: ` + series.projects.map((p) => `${p} ${series.values[p].reduce((a, b) => a + b, 0)} 件`).join('、') }, ...parts)));
+}
+
+const dayLabel = (d) => `${Number(d.slice(4, 6))}/${Number(d.slice(6))}`;
+
+// ---- GitHub の芝（GraphQL の contributionsCollection） ----
+// 行: 組織（メンバーごとの organizationID で絞った貢献の合計）と、メンバーそれぞれ（すべての貢献）。
+// API は 3 回（メンバーの一覧・組織の ID・メンバーの貢献をまとめて）。ビジュアルの節を開いたときだけ読む
+
+let contribCache = null;     // { rows } または { error }
+let contribLoading = null;
+
+function contribBlock() {
+  const box = el('div', { class: 'contrib' }, el('p', { class: 'note' }, 'ビジュアルの節を開くと読みます'));
+  const details = document.querySelector('details[data-fold=visuals]');
+  const start = () => {
+    if (contribCache) { drawContrib(box); return; }
+    box.replaceChildren(el('p', { class: 'note' }, '読んでいます…'));
+    contribLoading ||= fetchContributions().then((r) => { contribCache = r; }, (e) => { contribCache = { error: e }; }).finally(() => { contribLoading = null; });
+    contribLoading.then(() => drawContrib(box));
+  };
+  if (details && details.open) start();
+  else if (details) details.addEventListener('toggle', function once() { if (details.open) { details.removeEventListener('toggle', once); start(); } });
+  return box;
+}
+
+async function fetchContributions() {
+  const token = ctx.token;
+  const members = ((await gh(token, `/orgs/${CONFIG.org}/members?per_page=100`)).body || []).map((m) => m.login).filter((l) => /^[A-Za-z0-9-]{1,39}$/.test(l)).sort();
+  const gql = async (query, variables) => {
+    const r = (await gh(token, '/graphql', { method: 'POST', body: { query, variables } })).body;
+    if (r.errors && r.errors.length) throw Object.assign(new Error(r.errors.map((e) => e.message).join(' / ')), { status: 'graphql' });
+    return r.data;
+  };
+  const orgId = (await gql('query($o:String!){organization(login:$o){id}}', { o: CONFIG.org })).organization.id;
+  const cal = 'contributionCalendar{totalContributions weeks{contributionDays{date contributionCount}}}';
+  const vars = Object.fromEntries(members.map((m, i) => [`l${i}`, m]));
+  const query = `query($oid:ID!${members.map((_, i) => `,$l${i}:String!`).join('')}){${members.map((_, i) => `u${i}:user(login:$l${i}){login all:contributionsCollection{${cal}} org:contributionsCollection(organizationID:$oid){${cal}}}`).join(' ')}}`;
+  const data = members.length ? await gql(query, { oid: orgId, ...vars }) : {};
+  const users = members.map((_, i) => data[`u${i}`]).filter(Boolean);
+  const orgDays = sumDays(users.map((u) => calendarDays(u.org.contributionCalendar.weeks)));
+  return {
+    rows: [
+      { name: CONFIG.org, url: `https://github.com/${CONFIG.org}`, note: `メンバー ${users.length} 人の組織内の貢献の合計`, days: orgDays, total: users.reduce((a, u) => a + u.org.contributionCalendar.totalContributions, 0) },
+      ...users.map((u) => ({ name: u.login, url: `https://github.com/${u.login}`, note: 'すべての貢献', days: calendarDays(u.all.contributionCalendar.weeks), total: u.all.contributionCalendar.totalContributions })),
+    ],
+  };
+}
+
+function drawContrib(box) {
+  if (!contribCache) return;
+  if (contribCache.error) {
+    const e = contribCache.error;
+    box.replaceChildren(el('p', { class: 'status error' }, `読めませんでした（${[e.status, e.message || String(e)].filter(Boolean).join(': ')}）。トークンに組織の Members: Read-only があるか確かめてください。fine-grained のトークンでは、ほかの人の非公開の貢献は数えられないことがあります`));
+    return;
+  }
+  const C = 11, G = 2, LEFT = 0, TOP = 14;
+  const rows = contribCache.rows.map((r) => {
+    const cells = gridCells(r.days);
+    const cols = cells.length ? cells[cells.length - 1].col + 1 : 0;
+    const W = LEFT + cols * (C + G), H = TOP + 7 * (C + G);
+    const months = [];
+    let last = '';
+    for (const c of cells) {
+      const m = c.date.slice(5, 7);
+      if (c.row === 0 && m !== last && c.col < cols - 2) { months.push(svg('text', { x: LEFT + c.col * (C + G), y: 10, class: 'axis' }, `${Number(m)}月`)); last = m; }
+    }
+    const rects = cells.map((c) => svg('rect', { x: LEFT + c.col * (C + G), y: TOP + c.row * (C + G), width: C, height: C, rx: 2, class: `cg cg-${c.level}` }, svg('title', {}, `${c.date}: ${c.count} 件`)));
+    return el('div', { class: 'contrib-row' },
+      el('div', { class: 'contrib-head' }, link(r.url, r.name, 'contrib-name'), el('span', { class: 'sub' }, ` ${r.total} 件（${r.note}）`)),
+      el('div', { class: 'scroll' }, svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'contrib-svg', role: 'img', 'aria-label': `${r.name}: 直近 1 年に ${r.total} 件` }, ...months, ...rects)));
+  });
+  const legend = el('div', { class: 'legend' }, '少ない', ...[0, 1, 2, 3, 4].map((l) => el('i', { class: `key cg-${l}` })), '多い（濃さは行ごとの四分位）');
+  box.replaceChildren(legend, ...rows);
 }
 
 // 案件ごとのカード: 進行中・待ちの数を大きく、完了・高以上・最終更新、状態の細い帯
