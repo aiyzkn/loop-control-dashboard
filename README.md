@@ -52,12 +52,17 @@
 
 ## 使い方
 
-1. GitHub で fine-grained の個人用トークンを作る（Settings → Developer settings → Personal access tokens → Fine-grained tokens）
+1. GitHub で fine-grained の個人用トークンを作る（Settings → Developer settings → Personal access tokens → Fine-grained tokens）。表示・書き換え・並べ替え・PR のマージのすべてに使える 1 本にする
    - Resource owner: `aiyzkn`
-   - Repository access: Only select repositories → `loop-control`（PR のマージもするなら、作業対象のリポジトリも）
-   - Repository permissions: 見るだけなら **Contents: Read-only**、書き換え・並べ替えもするなら **Contents: Read and write**。PR のマージもするなら、さらに **Pull requests: Read and write**（検査を見るなら Checks・Commit statuses: Read-only）。Metadata: Read-only は自動で付く
+   - Repository access: Only select repositories → `loop-control` と、PR をマージしたい作業対象のリポジトリ
+   - Repository permissions:
+     - **Contents: Read and write** … タスクの表示と、書き換え・並べ替え。PR のマージにも要る
+     - **Pull requests: Read and write** … PR の状態を読み、マージする
+     - **Checks: Read-only**・**Commit statuses: Read-only** … マージの前に検査の結果を見る（無いと「検査なし（または読めない）」と出る）
+     - Metadata: Read-only は自動で付く
    - Organization permissions: **Members: Read-only**（組織への所属を確かめるため）
    - 有効期限は短めに。組織の設定で承認が要る場合は、管理者の承認を待つ
+   - 見るだけの端末・人には、Contents を **Read-only** にし、Pull requests を付けないトークンを使う（「送る」「マージする」は 403 で断られる）
 2. 公開したページを開き、トークンを入れて「表示する」
 3. トークンは、既定ではタブを閉じるまでブラウザの中（`sessionStorage`）にだけ置きます。「このブラウザに覚えさせる」を選ぶと `localStorage` に置きます（共有の PC では使わない）。「トークンを消す」で消えます
 
