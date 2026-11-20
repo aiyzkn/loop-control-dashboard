@@ -26,14 +26,24 @@
     </form>
     <details>
       <summary>トークンの作り方</summary>
+      <p class="note">表示・書き換え・並べ替え・PR のマージのすべてに使える 1 本を作ります。</p>
       <ol>
         <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
-        <li>Resource owner: <code>aiyzkn</code>。Repository access: Only select repositories → <code>loop-control</code></li>
-        <li>Repository permissions: 見るだけなら <strong>Contents: Read-only</strong>、書き換え・並べ替えもするなら <strong>Contents: Read and write</strong>。PR のマージもするなら、作業対象のリポジトリも対象に入れ、<strong>Pull requests: Read and write</strong>（検査を見るなら Checks・Commit statuses: Read-only）。Metadata: Read-only は自動で付く</li>
+        <li>Resource owner: <code>aiyzkn</code></li>
+        <li>Repository access: Only select repositories → <code>loop-control</code> と、PR をマージしたい作業対象のリポジトリ（タスクの成果物に PR が載るもの）</li>
+        <li>Repository permissions:
+          <ul>
+            <li><strong>Contents: Read and write</strong> … タスクの表示と、書き換え・並べ替え（1 回の操作 = 1 コミット）。PR のマージにも要る</li>
+            <li><strong>Pull requests: Read and write</strong> … PR の状態を読み、マージする</li>
+            <li><strong>Checks: Read-only</strong>・<strong>Commit statuses: Read-only</strong> … マージの前に検査の結果を見る（無いと「検査なし（または読めない）」と出る）</li>
+            <li>Metadata: Read-only は自動で付く</li>
+          </ul>
+        </li>
         <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
         <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
       </ol>
-      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。書き込みは、確認の画面で「送る」を押したときだけです。</p>
+      <p class="note">見るだけの端末・人には、Contents を <strong>Read-only</strong> にし、Pull requests を付けないトークンを使ってください（「送る」「マージする」は 403 で断られます）。</p>
+      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。書き込みは、確認の画面で「送る」「マージする」を押したときだけです。書き込みのできるトークンなので、「このブラウザに覚えさせる」は自分専用の端末だけで使ってください。</p>
     </details>
     <p id="status" class="status" role="status"></p>
   </section>
