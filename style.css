@@ -263,3 +263,4 @@ rect.cg { stroke: var(--line); stroke-width: 0.5; }
 .contrib-svg .axis { fill: var(--muted); font-size: 9px; }
 .gantt-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .gantt-period { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+table.open-prs td { vertical-align: top; }

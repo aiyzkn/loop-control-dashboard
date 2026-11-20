@@ -10,7 +10,7 @@ import {
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
-  MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict,
+  MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
@@ -136,6 +136,7 @@ async function load(token) {
   // 書き込みに使う、読んだ時点の状態
   archivedCache = null;   // ガントチャートの完了は、読み込みのたびに読み直す（ボタンで）
   contribCache = null;    // GitHub の芝も、読み込みのたびに（ビジュアルの節を開いたときに）読み直す
+  openPrsCache = null;    // 未マージの PR も、読み込みのたびに（節を開いたときに）読み直す
   ctx = {
     token, login: me.login, branch, head,
     canWrite: !!(repoInfo.permissions && repoInfo.permissions.push),
@@ -655,6 +656,9 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   // 並べ替え
   renderBoard(open);
 
+  // 未マージの PR（節を開いたときだけ読む）
+  renderOpenPrs({ tasks, projects });
+
   // 案件とリポジトリ
   const pj = [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
   $('projects').replaceChildren(pj.length ? el('table', {},
@@ -1086,6 +1090,68 @@ function treemap(rows) {
   return el('div', {}, legend, svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'treemap', role: 'img', 'aria-label': `案件ごとのタスクの数: ${rows.filter((r) => r.total).map((r) => `${r.project} ${r.total}`).join('、')}` }, ...g));
 }
 
+// ---- 未マージの PR（案件の「リポジトリ」の表にある GitHub のリポジトリの、開いている PR） ----
+// リポジトリごとに API を 1 回。節を開いたときだけ読み、読み込みのたびに読み直す。マージは「状態・マージ」の画面で
+
+let openPrsCache = null;     // { repos: [{ full, projects, prs: [...] | null（読めない） }] }
+let openPrsLoading = null;
+
+function renderOpenPrs({ tasks, projects }) {
+  const box = $('openPrs');
+  const repos = githubRepos([...projects.values()]);
+  if (!repos.length) { box.replaceChildren(el('p', { class: 'note' }, '案件の「リポジトリ」の表に、GitHub のリポジトリがありません')); return; }
+  const details = document.querySelector('details[data-fold=prs]');
+  const start = () => {
+    if (openPrsCache) { drawOpenPrs(box, tasks, projects); return; }
+    box.replaceChildren(el('p', { class: 'note' }, `${repos.length} のリポジトリを読んでいます…`));
+    openPrsLoading ||= fetchOpenPrs(repos).then((r) => { openPrsCache = r; }).finally(() => { openPrsLoading = null; });
+    openPrsLoading.then(() => { if (box.isConnected) drawOpenPrs(box, tasks, projects); }, (e) => box.replaceChildren(el('p', { class: 'status error' }, `読めませんでした（${e.message || e}）`)));
+  };
+  if (details && details.open) start();
+  else {
+    box.replaceChildren(el('p', { class: 'note' }, '節を開くと読みます'));
+    if (details) details.addEventListener('toggle', function once() { if (details.open) { details.removeEventListener('toggle', once); start(); } });
+  }
+}
+
+async function fetchOpenPrs(repos) {
+  const out = await mapLimit(repos, 4, async (r) => {
+    const res = await gh(ctx.token, `/repos/${r.owner}/${encodeURIComponent(r.repo)}/pulls?state=open&per_page=50&sort=updated&direction=desc`, { allow404: true });
+    return { ...r, prs: res.body ? res.body : null, status: res.status };
+  });
+  return { repos: out };
+}
+
+function drawOpenPrs(box, tasks, projects) {
+  const prsOf = (t) => findPullRequests(t.refsText, (projects.get(t.project) || {}).repos || []).map((x) => x.url);
+  const rows = [];
+  for (const r of openPrsCache.repos) for (const p of r.prs || []) rows.push({ r, p });
+  rows.sort((a, b) => String(b.p.updated_at).localeCompare(String(a.p.updated_at)));
+  const unreadable = openPrsCache.repos.filter((r) => !r.prs);
+  const reload = el('button', { type: 'button', class: 'mini' }, '読み直す');
+  reload.addEventListener('click', () => { openPrsCache = null; renderOpenPrs({ tasks, projects }); });
+  const head = el('p', { class: 'sub' }, `${openPrsCache.repos.length - unreadable.length} のリポジトリに、開いている PR が ${rows.length} 件`, ' ', reload);
+  const table = rows.length ? el('div', { class: 'scroll' }, el('table', { class: 'open-prs' },
+    el('thead', {}, el('tr', {}, ...['リポジトリ', 'PR', '作成', 'ブランチ', '更新', 'タスク', '操作'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.map(({ r, p }) => {
+      const url = `https://github.com/${r.owner}/${r.repo}/pull/${Number(p.number)}`;
+      const t = taskForPr(tasks, url, prsOf);
+      const x = { url, label: `${r.repo}#${Number(p.number)}` };
+      const btn = el('button', { type: 'button', class: 'mini', 'aria-label': `${x.label} の状態を見る` }, '状態・マージ');
+      btn.addEventListener('click', () => openMerge(t, x));
+      return el('tr', {},
+        el('td', {}, link(`https://github.com/${r.owner}/${r.repo}`, r.full), el('div', { class: 'sub' }, r.projects.join('・'))),
+        el('td', {}, link(url, `#${Number(p.number)} ${p.title || ''}`), p.draft ? el('span', { class: 'badge st-draft' }, '下書き') : null),
+        el('td', {}, p.user && p.user.login ? link(`https://github.com/${encodeURIComponent(p.user.login)}`, p.user.login) : ''),
+        el('td', { class: 'sub' }, `${p.base ? p.base.ref : '?'} ← ${p.head ? p.head.ref : '?'}`),
+        el('td', {}, ageText(p.updated_at)),
+        el('td', {}, t ? link(blobUrl(view.branch, t.path), t.id) : el('span', { class: 'sub' }, '—')),
+        el('td', {}, btn));
+    })))) : el('p', { class: 'note' }, '開いている PR はありません');
+  const note = unreadable.length ? el('p', { class: 'sub' }, `読めないリポジトリ（トークンの対象に入っていない・権限が無い）: ${unreadable.map((r) => `${r.full}（${r.status}）`).join('、')}`) : null;
+  box.replaceChildren(...[head, table, note].filter(Boolean));
+}
+
 function editButton(t) {
   const unanswered = t.questions.filter((q) => !q.answer).length;
   const b = el('button', { type: 'button', class: 'mini' + (unanswered ? ' primary' : '') }, unanswered ? `回答する（${unanswered}）` : '書き換える');
@@ -1165,7 +1231,8 @@ async function openMerge(t, x) {
     }
     // タスクのログに残す（書き込みの権限があるときだけ）
     let logNote = '';
-    if (ctx.canWrite) {
+    if (!t) logNote = '関係するタスクが無いので、タスクのログには書いていません';
+    else if (ctx.canWrite) {
       const before = ctx.texts.get(t.path);
       const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）` }, { who: WHO() }).text;
       try { await commitChanges([{ path: t.path, content: after }], commitMessage(ctx.login, 'PR のマージを記録', [t.id])); logNote = 'タスクのログに記録しました'; }
@@ -1176,10 +1243,13 @@ async function openMerge(t, x) {
     msg.textContent = `マージしました（${String(merged.sha || '').slice(0, 7)}）。${logNote}`;
     go.remove();
     method.remove();
+    openPrsCache = null;   // 未マージの PR の一覧も読み直す
     load(ctx.token).catch(showError);
   });
   dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), el('div', { class: 'dlg-body' }, facts,
-    el('p', { class: 'sub' }, `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`)),
+    el('p', { class: 'sub' }, t
+      ? `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`
+      : '関係するタスクが見つかりません（タスクの成果物に、この PR の URL が書かれていない）。マージしてもタスクのログには残りません')),
   msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go));
 }
 

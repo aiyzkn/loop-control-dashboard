@@ -241,3 +241,19 @@ test('renderTask はひな形を埋め、タスクとして読める', () => {
   assert.throws(() => renderTask(tpl, { id: 'x', title: 'T', project: 'loop-kit', stage: 'x', priority: 'low' }));
   assert.throws(() => renderTask('no placeholders', { id: 'x', title: 'T', project: 'loop-kit', stage: 'propose', priority: 'low' }));
 });
+
+import { githubRepos, taskForPr } from '../edit.js';
+
+test('githubRepos は案件の表から GitHub のリポジトリを重ねずに集める', () => {
+  const r = githubRepos([
+    { id: 'a', repos: [{ host: 'github.com', repo: 'org/x' }, { host: 'gitlab.com', repo: 'g/y' }, { host: 'github.com', repo: '-' }] },
+    { id: 'b', repos: [{ host: 'GitHub.com', repo: 'Org/X' }, { host: 'github.com', repo: 'org/a.b' }, { host: 'github.com', repo: 'org/..' }] },
+  ]);
+  assert.deepEqual(r.map((x) => [x.full, x.projects]), [['org/a.b', ['b']], ['org/x', ['a', 'b']]]);
+});
+
+test('taskForPr は PR を成果物に持つタスクを、進行中・待ちを先に返す', () => {
+  const tasks = [{ id: 'old', status: 'done', prs: ['https://github.com/o/r/pull/1'] }, { id: 'now', status: 'waiting', prs: ['https://github.com/O/R/pull/1'] }, { id: 'z', status: 'ready', prs: [] }];
+  assert.equal(taskForPr(tasks, 'https://github.com/o/r/pull/1', (t) => t.prs).id, 'now');
+  assert.equal(taskForPr(tasks, 'https://github.com/o/r/pull/9', (t) => t.prs), null);
+});
