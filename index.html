@@ -10,55 +10,61 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-  <header>
-    <h1>loop-control ダッシュボード</h1>
-    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を表示します。トークンに書き込みの権限があれば、タスクの書き換え・並べ替え・PR のマージ・依頼の登録もできます（送る前に差分を見せます）。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
-  </header>
-
-  <section class="auth">
-    <form id="tokenForm" autocomplete="off">
-      <label for="token">GitHub の fine-grained の個人用トークン</label>
-      <input id="token" type="password" placeholder="github_pat_…" spellcheck="false">
-      <label class="check"><input id="remember" type="checkbox"> このブラウザに覚えさせる（共有の PC では使わない）</label>
-      <button type="submit">表示する</button>
-      <button type="button" id="reload">読み直す</button>
-      <button type="button" id="forget">トークンを消す</button>
-    </form>
-    <details>
-      <summary>トークンの作り方</summary>
-      <p class="note">表示・書き換え・並べ替え・PR のマージのすべてに使える 1 本を作ります。</p>
-      <ol>
-        <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
-        <li>Resource owner: <code>aiyzkn</code></li>
-        <li>Repository access: Only select repositories → <code>loop-control</code> と、PR をマージしたい作業対象のリポジトリ（タスクの成果物に PR が載るもの）</li>
-        <li>Repository permissions:
-          <ul>
-            <li><strong>Contents: Read and write</strong> … タスクの表示と、書き換え・並べ替え（1 回の操作 = 1 コミット）。PR のマージにも要る</li>
-            <li><strong>Pull requests: Read and write</strong> … PR の状態を読み、マージする</li>
-            <li><strong>Commit statuses: Read-only</strong> … マージの前に、コミットの状態（commit status）で検査の結果を見る</li>
-            <li>Metadata: Read-only は自動で付く</li>
-          </ul>
-          <p class="note">fine-grained のトークンには Checks の権限がありません（GitHub の制限。Actions の権限でも代わりになりません）。そのため、GitHub Actions などの check run の結果は読めず、commit status を使わない検査は「検査なし（または読めない）」と出ます。マージの前に、PR の画面で検査を確かめてください。</p>
-        </li>
-        <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
-        <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
-      </ol>
-      <p class="note">見るだけの端末・人には、Contents を <strong>Read-only</strong> にし、Pull requests を付けないトークンを使ってください（「送る」「マージする」は 403 で断られます）。</p>
-      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。書き込みは、確認の画面で「送る」「マージする」を押したときだけです。書き込みのできるトークンなので、「このブラウザに覚えさせる」は自分専用の端末だけで使ってください。</p>
-    </details>
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1>loop-control ダッシュボード</h1>
+      <div class="actions">
+        <button type="button" id="reload">読み直す</button>
+        <button type="button" id="newRequestBtn" class="primary" hidden>＋ 依頼を登録</button>
+        <details id="tokenBox" class="token-box">
+          <summary>トークン</summary>
+          <div class="token-panel auth">
+            <form id="tokenForm" autocomplete="off">
+              <label for="token">GitHub の fine-grained の個人用トークン</label>
+              <input id="token" type="password" placeholder="github_pat_…" spellcheck="false">
+              <label class="check"><input id="remember" type="checkbox"> このブラウザに覚えさせる（共有の PC では使わない）</label>
+              <button type="submit">表示する</button>
+              <button type="button" id="forget">トークンを消す</button>
+            </form>
+            <details class="howto">
+              <summary>トークンの作り方</summary>
+              <p class="note">表示・書き換え・並べ替え・PR のマージのすべてに使える 1 本を作ります。</p>
+              <ol>
+                <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
+                <li>Resource owner: <code>aiyzkn</code></li>
+                <li>Repository access: Only select repositories → <code>loop-control</code> と、PR をマージしたい作業対象のリポジトリ（タスクの成果物に PR が載るもの）</li>
+                <li>Repository permissions:
+                  <ul>
+                    <li><strong>Contents: Read and write</strong> … タスクの表示と、書き換え・並べ替え（1 回の操作 = 1 コミット）。PR のマージにも要る</li>
+                    <li><strong>Pull requests: Read and write</strong> … PR の状態を読み、マージする</li>
+                    <li><strong>Commit statuses: Read-only</strong> … マージの前に、コミットの状態（commit status）で検査の結果を見る</li>
+                    <li>Metadata: Read-only は自動で付く</li>
+                  </ul>
+                  <p class="note">fine-grained のトークンには Checks の権限がありません（GitHub の制限。Actions の権限でも代わりになりません）。そのため、GitHub Actions などの check run の結果は読めず、commit status を使わない検査は「検査なし（または読めない）」と出ます。マージの前に、PR の画面で検査を確かめてください。</p>
+                </li>
+                <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
+                <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
+              </ol>
+              <p class="note">見るだけの端末・人には、Contents を <strong>Read-only</strong> にし、Pull requests を付けないトークンを使ってください（「送る」「マージする」は 403 で断られます）。</p>
+              <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。書き込みは、確認の画面で「送る」「マージする」を押したときだけです。書き込みのできるトークンなので、「このブラウザに覚えさせる」は自分専用の端末だけで使ってください。</p>
+            </details>
+          </div>
+        </details>
+      </div>
+    </div>
     <p id="status" class="status" role="status"></p>
-  </section>
+  </header>
+  <p class="note intro">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を表示します。トークンに書き込みの権限があれば、タスクの書き換え・並べ替え・PR のマージ・依頼の登録もできます（送る前に差分を見せます）。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
 
   <main id="main" hidden>
-    <p class="docs sub">指令リポジトリの決まり: <span id="docs"></span></p>
     <section class="panel"><div id="overall" class="overview"></div><div id="summary" class="cards"></div></section>
-    <section><h2>グラフ</h2><div id="charts" class="charts"></div></section>
-    <section><h2>PC の状況</h2><div id="pcs" class="scroll"></div></section>
-    <section><h2>タスク（進行中・待ち）</h2><div id="tasks" class="scroll"></div></section>
     <section><h2>並べ替え（優先度と順）</h2><div id="board"></div></section>
-    <section><h2>案件とリポジトリ</h2><div id="projects" class="scroll"></div></section>
-    <section><h2>依頼の登録</h2><div id="newRequest"></div></section>
-    <section><h2>受付</h2><div id="inbox"></div></section>
+    <details class="fold" data-fold="tasks" open><summary><h2>タスク（進行中・待ち）</h2></summary><div id="tasks" class="scroll"></div></details>
+    <details class="fold" data-fold="pcs" open><summary><h2>PC の状況</h2></summary><div id="pcs" class="scroll"></div></details>
+    <details class="fold" data-fold="charts"><summary><h2>グラフ</h2></summary><div id="charts" class="charts"></div></details>
+    <details class="fold" data-fold="projects"><summary><h2>案件とリポジトリ</h2></summary><div id="projects" class="scroll"></div></details>
+    <details class="fold" data-fold="inbox"><summary><h2>受付</h2></summary><div id="inbox"></div></details>
+    <p class="docs sub">指令リポジトリの決まり: <span id="docs"></span></p>
   </main>
   <dialog id="dialog" aria-modal="true"></dialog>
 </body>

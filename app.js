@@ -142,13 +142,47 @@ async function load(token) {
     taskPaths: [...files.tasks, ...files.archived],
     projectIds: [...projects.keys()].sort(),
   };
-  render({
+  view = {
     branch, tasks, pcs, inbox, projects, roster,
     archivedCount: files.archived.length,
     paths: entries.filter((e) => e.type === 'blob').map((e) => e.path),
     files, truncated: tree.truncated,
-  });
+  };
+  render(view);
+  newRequestForm = ctx.canWrite ? buildNewRequestForm(roster) : null;
+  $('newRequestBtn').hidden = !ctx.canWrite;
+  $('tokenBox').open = false;
   setStatus(`${me.login} として表示しています（${new Date().toLocaleString()} 時点。自動では更新しません）${ctx.canWrite ? '。書き込みできます' : '。書き込みの権限が無いので、参照だけです'}`, 'ok');
+}
+
+let view = null;          // 表示に使った材料（書き込みの後は、ここを手元で直して描き直す）
+
+// 書き込みの後に、全体を読み直さず、書いたファイルだけを手元の状態に反映して描き直す（API は tree の 1 回だけ）。
+// changes = [{ path, content }]、commit = { sha, tree }。
+// 書いていないファイルの blob の sha は、読んだ時点のままにする（ほかで変わっていたら、次の書き込みで競合として止めるため）
+async function applyLocal(changes, commit) {
+  ctx.head = commit;
+  let now = null;
+  try { now = new Map(((await gh(ctx.token, `${REPO()}/git/trees/${commit.tree}?recursive=1`)).body.tree || []).map((e) => [e.path, e.sha])); } catch { }
+  for (const c of changes) {
+    // 読めなければ消しておく（次にこのファイルを書くとき、ほかで変わっていなくても競合として止まる。「読み直す」で直る）
+    if (now && now.has(c.path)) ctx.blobs.set(c.path, now.get(c.path)); else ctx.blobs.delete(c.path);
+    if (c.path === ctx.inboxPath) {
+      ctx.inboxText = c.content;
+      view.inbox = parseInbox(c.content);
+      continue;
+    }
+    if (!/^projects\/[^/]+\/tasks\/[^/]+\.md$/.test(c.path)) continue;
+    if (!ctx.texts.has(c.path)) {
+      view.files.tasks.push(c.path);
+      view.paths.push(c.path);
+      ctx.taskPaths.push(c.path);
+    }
+    ctx.texts.set(c.path, c.content);
+    ctx.tasks = sortTasks([...ctx.tasks.filter((x) => x.path !== c.path), parseTask(c.path, c.content)]);
+  }
+  view.tasks = ctx.tasks;
+  render(view);
 }
 
 // ---- 書き込み（1 回の操作 = 1 コミット。Git Data API） ----
@@ -188,11 +222,28 @@ async function commitChanges(changes, message) {
     if (e.status === 422) throw new Conflict('送っている間に、ほかの書き込みが入りました');
     throw e;
   }
-  return commit.sha;
+  return { sha: commit.sha, tree: tree.sha };
+}
+
+// 送る（確認の画面から、または並べ替えで確認を省いたとき）。成功したら手元に反映して描き直す（全体は読み直さない）
+async function sendChanges(items, message) {
+  const changes = items.map((it) => ({ path: it.path, content: it.after }));
+  const commit = await commitChanges(changes, message);
+  await applyLocal(changes, commit);
+  setStatus(`書き込みました（${commit.sha.slice(0, 7)}・${new Date().toLocaleTimeString()}）。ほかの変更は「読み直す」で取り込みます`, 'ok');
+}
+
+function writeError(e) {
+  return e instanceof Conflict
+    ? `${e.message}。上書きはしていません。「読み直す」で最新を読んでから、やり直してください`
+    : e.status === 403 || e.status === 404
+      ? `書き込めませんでした（${e.status}）。トークンに Contents: Read and write の権限があるか確かめてください`
+      : (e.message || String(e));
 }
 
 // 確認の画面: 差分を見せ、「送る」でコミットする。items = [{ path, before, after }]
-function confirmAndSend(title, items, message) {
+// back があれば「戻る」で前の画面へ、onSent は送れた後に呼ぶ
+function confirmAndSend(title, items, message, { back, onSent } = {}) {
   const dlg = $('dialog');
   const body = el('div', { class: 'dlg-body' },
     el('p', { class: 'sub' }, `コミット: ${message}`),
@@ -209,22 +260,22 @@ function confirmAndSend(title, items, message) {
     busy = true; send.disabled = true; cancel.disabled = true;
     msg.textContent = '送っています…'; msg.className = 'status';
     try {
-      await commitChanges(items.map((it) => ({ path: it.path, content: it.after })), message);
+      await sendChanges(items, message);
+      if (onSent) onSent();
       dlg.close();
-      setStatus('書き込みました。読み直しています…', 'ok');
-      await load(ctx.token);
     } catch (e) {
       msg.className = 'status error';
-      msg.textContent = e instanceof Conflict
-        ? `${e.message}。上書きはしていません。「読み直す」で最新を読んでから、やり直してください`
-        : e.status === 403 || e.status === 404
-          ? `書き込めませんでした（${e.status}）。トークンに Contents: Read and write の権限があるか確かめてください`
-          : (e.message || String(e));
+      msg.textContent = writeError(e);
     } finally {
       busy = false; send.disabled = false; cancel.disabled = false;
     }
   });
-  dlg.replaceChildren(el('h2', {}, title), body, msg, el('div', { class: 'dlg-actions' }, cancel, send));
+  let backBtn = null;
+  if (back) {
+    backBtn = el('button', { type: 'button' }, '戻る');
+    backBtn.addEventListener('click', () => { if (!busy) back(); });
+  }
+  dlg.replaceChildren(el('h2', {}, title), body, msg, el('div', { class: 'dlg-actions' }, cancel, backBtn, send));
   if (!dlg.open) dlg.showModal();
 }
 
@@ -302,11 +353,21 @@ function moveTask(columns, id, toPriority, toIndex) {
       : `並べ替え: ${id} を動かしたため order を ${t.order ?? '（なし）'} → ${c.order} に振り直し`;
     return { path: t.path, before, after: applyTaskEdits(before, { front, log: what }, { who: WHO(), now }).text };
   });
-  confirmAndSend(`並べ替えの確認: ${id}`, items, commitMessage(ctx.login, '並べ替え', plan.map((c) => c.id)));
+  const message = commitMessage(ctx.login, '並べ替え', plan.map((c) => c.id));
+  if (!prefs.get('quickReorder')) { confirmAndSend(`並べ替えの確認: ${id}`, items, message); return; }
+  // 確認を省くとき: 先に画面の並びを動かし（送っている間は操作できない）、送れたら確定、だめなら元に戻す
+  const after = new Map(items.map((it) => [it.path, it.after]));
+  const guess = ctx.tasks.map((t) => (after.has(t.path) ? parseTask(t.path, after.get(t.path)) : t));
+  busy = true;
+  renderBoard(guess.filter((t) => OPEN.includes(t.status)), { pending: true });
+  setStatus(`並べ替えを送っています…（${id}）`);
+  sendChanges(items, message)
+    .catch((e) => { renderBoard(ctx.tasks.filter((t) => OPEN.includes(t.status))); setStatus(`並べ替えを送れませんでした: ${writeError(e)}`, 'error'); })
+    .finally(() => { busy = false; });
 }
 
 // 並べ替えの画面: 優先度ごとの列。ドラッグ＆ドロップ、またはカードのボタン・Alt + 矢印キー
-function renderBoard(open) {
+function renderBoard(open, { pending = false } = {}) {
   const board = $('board');
   if (!ctx.canWrite) {
     board.replaceChildren(el('p', { class: 'note' }, 'トークンに書き込みの権限が無いので、並べ替えはできません（README の「使い方」）'));
@@ -354,10 +415,25 @@ function renderBoard(open) {
     list.addEventListener('drop', (ev) => { ev.preventDefault(); list.classList.remove('over'); if (dragId) moveTask(columns, dragId, p, indexAt(list, ev.clientY)); });
     return el('div', { class: `col pr-${p}` }, el('h3', {}, `${PRIORITY_JA[p]}（${columns[p].length}）`), list);
   });
+  const quick = el('input', { type: 'checkbox', id: 'quickReorder' });
+  quick.checked = !!prefs.get('quickReorder');
+  quick.addEventListener('change', () => prefs.set('quickReorder', quick.checked));
+  const reload = el('button', { type: 'button', class: 'mini' }, '読み直す');
+  reload.addEventListener('click', () => $('reload').click());
   board.replaceChildren(
-    el('p', { class: 'note' }, '列の中・列の間でカードを動かすと、優先度（priority）と並びの順（order）を書き換えます。送る前に差分を見せます。キーボードでは、カードを選んで Alt + 矢印キー。'),
-    el('div', { class: 'board' }, ...cols));
+    el('div', { class: 'board-tools' },
+      el('p', { class: 'note' }, '列の中・列の間でカードを動かすと、優先度（priority）と並びの順（order）を書き換えます。キーボードでは、カードを選んで Alt + 矢印キー。'),
+      el('span', {}, el('label', {}, quick, ' 確認を省いてすぐ送る（このブラウザに覚える）'), ' ', reload)),
+    el('div', { class: 'board' + (pending ? ' pending' : '') }, ...cols));
 }
+
+// このブラウザに覚える設定（開閉・確認を省くか）。保存できない環境では、その場だけ
+const prefs = {
+  key: 'loop-control-dashboard.prefs',
+  all() { try { return JSON.parse(localStorage.getItem(this.key) || '{}'); } catch { return {}; } },
+  get(k) { return this.all()[k]; },
+  set(k, v) { try { localStorage.setItem(this.key, JSON.stringify({ ...this.all(), [k]: v })); } catch { } },
+};
 
 const STATUS_JA = { doing: '作業中', waiting: '判断待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
 const OPEN = ['doing', 'waiting', 'blocked', 'ready', 'draft'];
@@ -572,9 +648,6 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   // 並べ替え
   renderBoard(open);
 
-  // 依頼の登録
-  renderNewRequest(roster);
-
   // 案件とリポジトリ
   const pj = [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
   $('projects').replaceChildren(pj.length ? el('table', {},
@@ -607,12 +680,18 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
 // ---- 依頼の登録（受付への追記、またはタスクファイルの作成。どちらも 1 コミット） ----
 
-function renderNewRequest(roster) {
-  const box = $('newRequest');
-  if (!ctx.canWrite) {
-    box.replaceChildren(el('p', { class: 'note' }, 'トークンに書き込みの権限が無いので、依頼の登録はできません（README の「使い方」）'));
-    return;
-  }
+// 入力欄は読み込みのたびに 1 つ作り、ダイアログを閉じても入力を残す（送れたら空にする）
+let newRequestForm = null;
+
+function openNewRequest() {
+  if (!ctx || !ctx.canWrite || busy || !newRequestForm) return;
+  const dlg = $('dialog');
+  dlg.replaceChildren(el('h2', {}, '依頼の登録'), newRequestForm.node);
+  if (!dlg.open) dlg.showModal();
+  newRequestForm.focus();
+}
+
+function buildNewRequestForm(roster) {
   const f = {
     dest: el('select', { name: 'dest' },
       el('option', { value: 'inbox' }, '受付（inbox.md）に追記する。エージェントが次の機会にタスクへ起こす'),
@@ -641,18 +720,26 @@ function renderNewRequest(roster) {
   sync();
   const msg = el('p', { class: 'status', role: 'status' });
   const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
-  next.addEventListener('click', () => submitNewRequest(f, msg).catch((e) => { msg.className = 'status error'; msg.textContent = e.message || String(e); }));
-  box.replaceChildren(
-    el('p', { class: 'note' }, '依頼を指令リポジトリに書きます。送る前に差分を見せます。緊急（urgent）は、作業中のエージェントが中断して先に行います（AGENTS.md 7.2）。'),
-    agents,
-    el('div', { class: 'fields' },
-      row('書く先', f.dest), row('案件', f.project), row('件名', f.title), slugRow,
-      row('段階', f.stage), row('優先度', f.priority), row('担当（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
-    el('label', { class: 'field' }, el('span', {}, '本文'), f.body),
-    msg, el('div', { class: 'dlg-actions' }, next));
+  const cancel = el('button', { type: 'button' }, '閉じる（入力は残す）');
+  cancel.addEventListener('click', () => $('dialog').close());
+  const form = {
+    node: el('div', { class: 'dlg-body new-request' },
+      el('p', { class: 'note' }, '依頼を指令リポジトリに書きます。送る前に差分を見せます。緊急（urgent）は、作業中のエージェントが中断して先に行います（AGENTS.md 7.2）。'),
+      agents,
+      el('div', { class: 'fields' },
+        row('書く先', f.dest), row('案件', f.project), row('件名', f.title), slugRow,
+        row('段階', f.stage), row('優先度', f.priority), row('担当（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
+      el('label', { class: 'field' }, el('span', {}, '本文'), f.body),
+      msg, el('div', { class: 'dlg-actions' }, cancel, next)),
+    focus: () => (f.project.value ? f.title : f.project).focus(),
+    reset: () => { f.title.value = ''; f.slug.value = ''; f.body.value = ''; msg.textContent = ''; },
+  };
+  next.addEventListener('click', () => submitNewRequest(f, msg, form).catch((e) => { msg.className = 'status error'; msg.textContent = e.message || String(e); }));
+  return form;
 }
 
-async function submitNewRequest(f, msg) {
+async function submitNewRequest(f, msg, form) {
+  const opts = { back: openNewRequest, onSent: form.reset };
   if (!ctx || !ctx.canWrite || busy) return;
   msg.className = 'status'; msg.textContent = '';
   const v = { project: f.project.value, title: f.title.value, stage: f.stage.value, priority: f.priority.value, assignee: f.assignee.value, body: f.body.value };
@@ -661,7 +748,7 @@ async function submitNewRequest(f, msg) {
     const entry = inboxEntry(v);
     const after = appendToInbox(ctx.inboxText, entry);
     confirmAndSend(`受付への追記の確認: ${v.project}`, [{ path: ctx.inboxPath, before: ctx.inboxText, after }],
-      commitMessage(ctx.login, `受付に追記 ${v.project}: ${v.title}`.slice(0, 100)));
+      commitMessage(ctx.login, `受付に追記 ${v.project}: ${v.title}`.slice(0, 100)), opts);
     return;
   }
   const slug = normalizeSlug(f.slug.value);
@@ -672,7 +759,7 @@ async function submitNewRequest(f, msg) {
   const id = newTaskId(slug, ids);
   const tpl = (await gh(ctx.token, `${REPO()}/contents/templates/task.md?ref=${ctx.head.sha}`, { raw: true })).body;
   const text = renderTask(tpl, { ...v, id, source: 'direct', request: v.body, now: isoLocal(), agent: WHO() });
-  confirmAndSend(`タスクの作成の確認: ${id}`, [{ path: `${prefix}tasks/${id}.md`, before: '', after: text }], commitMessage(ctx.login, '起票', [id]));
+  confirmAndSend(`タスクの作成の確認: ${id}`, [{ path: `${prefix}tasks/${id}.md`, before: '', after: text }], commitMessage(ctx.login, '起票', [id]), opts);
 }
 
 function editButton(t) {
@@ -778,6 +865,18 @@ function showError(e) {
   else if (e.status === 404 || e.status === 403) msg = `${CONFIG.owner}/${CONFIG.repo} を読めません（${e.status}）。トークンの対象リポジトリと Contents の権限を確かめてください`;
   setStatus(msg, 'error');
   $('main').hidden = true;
+  $('newRequestBtn').hidden = true;
+  $('tokenBox').open = true;
+}
+
+// 折りたためる節の開閉を、このブラウザに覚える
+function restoreFolds() {
+  const folds = prefs.get('folds') || {};
+  for (const d of document.querySelectorAll('details.fold[data-fold]')) {
+    const k = d.dataset.fold;
+    if (typeof folds[k] === 'boolean') d.open = folds[k];
+    d.addEventListener('toggle', () => prefs.set('folds', { ...(prefs.get('folds') || {}), [k]: d.open }));
+  }
 }
 
 function init() {
@@ -793,9 +892,11 @@ function init() {
     load(token).catch(showError);
   });
   $('reload').addEventListener('click', () => { const t = loadToken(); if (t) load(t).catch(showError); else setStatus('トークンを入れてください'); });
-  $('forget').addEventListener('click', () => { clearToken(); ctx = null; if ($('dialog').open) $('dialog').close(); $('main').hidden = true; setStatus('トークンを消しました'); });
+  $('forget').addEventListener('click', () => { clearToken(); ctx = null; if ($('dialog').open) $('dialog').close(); $('main').hidden = true; $('newRequestBtn').hidden = true; setStatus('トークンを消しました'); });
+  $('newRequestBtn').addEventListener('click', openNewRequest);
+  restoreFolds();
   const t = loadToken();
   if (t) load(t).catch(showError);
-  else setStatus('トークンを入れてください');
+  else { setStatus('トークンを入れてください（右上の「トークン」）'); $('tokenBox').open = true; }
 }
 init();
