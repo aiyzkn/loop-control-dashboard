@@ -125,7 +125,7 @@ ul.prs, ul.repos { margin: 0; padding-left: 16px; }
 
 /* ---- 書き込み: 並べ替えの列・確認の画面 ---- */
 button.primary { border-color: var(--link); background: var(--link); color: #fff; }
-button.mini { padding: 0 6px; font-size: 12px; line-height: 20px; }
+button.mini { padding: 0 6px; font-size: 12px; line-height: 20px; white-space: nowrap; }
 button:disabled { opacity: 0.4; cursor: default; }
 .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .col { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 4px 8px 8px; min-width: 0; }
@@ -163,3 +163,7 @@ pre.diff .del { color: var(--err); display: block; text-decoration: line-through
 pre.diff .gap { color: var(--muted); display: block; }
 @media (max-width: 800px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 480px) { .board { grid-template-columns: 1fr; } }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0 0 8px; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+ul.prs button.mini { margin-left: 4px; }

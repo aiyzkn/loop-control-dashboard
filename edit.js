@@ -199,3 +199,51 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
   out = appendLog(out, `${now} [${who}] ${oneLine(edits.log) || notes.join('、')}`);
   return { text: out, changed: true, notes };
 }
+
+// ---- PR のマージ（GitHub だけ。GitLab の MR は対象外） ----
+
+export const MERGE_METHODS = ['merge', 'squash', 'rebase'];
+
+// https://github.com/<owner>/<repo>/pull/<n> を分ける。ほかは null
+export function parsePrUrl(url) {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d{1,7})$/.exec(String(url || ''));
+  if (!m || /^\.+$/.test(m[2])) return null;
+  return { owner: m[1], repo: m[2], number: Number(m[3]) };
+}
+
+// 検査の結果をまとめる。checkRuns = GET …/commits/<sha>/check-runs の check_runs（読めなければ null）、
+// status = GET …/commits/<sha>/status の結果（読めなければ null）。
+// state: 'failure'（失敗がある）/ 'pending'（終わっていない）/ 'success'（全部成功・飛ばし）/ 'none'（検査が無い・読めない）
+export function summarizeChecks(checkRuns, status) {
+  const c = { success: 0, failure: 0, pending: 0, total: 0, failed: [] };
+  for (const r of checkRuns || []) {
+    c.total++;
+    if (r.status !== 'completed') c.pending++;
+    else if (['success', 'neutral', 'skipped'].includes(r.conclusion)) c.success++;
+    else { c.failure++; c.failed.push(r.name); }
+  }
+  for (const s of (status && status.statuses) || []) {
+    c.total++;
+    if (s.state === 'success') c.success++;
+    else if (s.state === 'pending') c.pending++;
+    else { c.failure++; c.failed.push(s.context); }
+  }
+  const state = c.failure ? 'failure' : c.pending ? 'pending' : c.total ? 'success' : 'none';
+  return { state, ...c };
+}
+
+// マージしてよいか（画面で止める理由）。pr = GET /repos/{o}/{r}/pulls/{n} の結果
+export function mergeVerdict(pr, checks) {
+  const reasons = [];
+  if (!pr) return { ok: false, reasons: ['PR を読めません'] };
+  if (pr.merged) return { ok: false, merged: true, reasons: ['マージ済みです'] };
+  if (pr.state !== 'open') reasons.push('閉じています');
+  if (pr.draft) reasons.push('下書き（draft）です');
+  if (pr.mergeable === false || pr.mergeable_state === 'dirty') reasons.push('競合があります（手元で解消が要ります）');
+  if (pr.mergeable === null || pr.mergeable === undefined) reasons.push('マージできるかを GitHub が計算中です。少し待って読み直してください');
+  if (pr.mergeable_state === 'blocked') reasons.push('ブランチの保護の条件（レビュー・必須の検査など）を満たしていません');
+  if (pr.mergeable_state === 'behind') reasons.push('基準ブランチより遅れています（保護の設定で、最新化が要ります）');
+  if (checks && checks.state === 'failure') reasons.push(`検査が失敗しています: ${checks.failed.join('、')}`);
+  if (checks && checks.state === 'pending') reasons.push('検査が終わっていません');
+  return { ok: reasons.length === 0, reasons };
+}

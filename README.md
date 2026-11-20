@@ -37,6 +37,7 @@
 | 操作 | 書き換えるもの | 画面 |
 |---|---|---|
 | 書き換え | タスクの先頭の `priority`・`status`・`stage`・`assignee`、「利用者への質問と回答」の `回答:`（日付を付けて書く）、ログのメモ | タスクの表の「書き換える」「回答する（未回答の数）」 |
+| PR のマージ | 作業対象のリポジトリの PR（GitHub だけ）。マージしたら、タスクのログに 1 行 | タスクの表の PR の横の「状態・マージ」 |
 | 並べ替え | 先頭の `priority` と `order`（任意の数。小さいほど先。無いものは同じ優先度の後ろ） | 「並べ替え」の優先度ごとの列。ドラッグ＆ドロップ、カードのボタン、Alt + 矢印キー（上下 = 順、左右 = 優先度） |
 
 - **1 回の操作 = 1 コミット。** Git Data API で、読んだ時点のコミットの上に tree → commit を作り、ブランチを fast-forward でだけ進めます（`force: false`）。コミットのメッセージは `[dashboard:<GitHub のログイン>] <操作> <タスク ID>`
@@ -45,14 +46,16 @@
 - 並べ替えは、動かしたタスクの `order` を前後の間の値 1 つで済ませます。間が無い・`order` の無いタスクの間に置いたときは、その列を 10 刻みで振り直します（変わるタスクを、まとめて 1 コミット）
 - `status` を `done`・`dropped` にしても、`archive/` への移動と担当の解放はしません（エージェントの `finish` で行います）。`urgent` に上げてよいのは利用者だけ（`AGENTS.md` 7.1）なので、このページを使う人が判断します
 - 並びの `order` は、auto-loop スキルの `status.ps1`・`kick.ps1` の並べ方に入れる変更（aiyzkn/auto-loop-engineering）と合わせて使います。スクリプトが `order` を知らない間は、ダッシュボードの中だけの並びです
+- PR のマージは、PR の状態（開いているか・下書きか・マージできるか・ブランチの保護）と検査（check runs・commit status）を読んで見せ、問題があれば「マージする」を押せないようにします。マージは、見たときの head のコミットを付けて送るので、見た後に push が入っていたら GitHub が断ります（409）。方法は merge / squash / rebase から選びます。マージの後の `finish`（タスクの完了・片付け）はしません。エージェントが再開するときに確かめます
+- PR のマージには、トークンの対象リポジトリに作業対象のリポジトリも入れ、`Contents: Read and write` と `Pull requests: Read and write` を付けます（検査を見るには `Checks: Read-only`・`Commit statuses: Read-only` も。無ければ「検査なし（または読めない）」と出ます）。GitLab の MR は、トークンが別なので対象外です
 - 書き込みの権限は、リポジトリの情報（`permissions.push`）で見分けます。fine-grained のトークンの権限そのものは、ここに出ないので、`Contents: Read-only` のトークンでは「送る」で 403 になります
 
 ## 使い方
 
 1. GitHub で fine-grained の個人用トークンを作る（Settings → Developer settings → Personal access tokens → Fine-grained tokens）
    - Resource owner: `aiyzkn`
-   - Repository access: Only select repositories → `loop-control`
-   - Repository permissions: 見るだけなら **Contents: Read-only**、書き換え・並べ替えもするなら **Contents: Read and write**（Metadata: Read-only は自動で付く）
+   - Repository access: Only select repositories → `loop-control`（PR のマージもするなら、作業対象のリポジトリも）
+   - Repository permissions: 見るだけなら **Contents: Read-only**、書き換え・並べ替えもするなら **Contents: Read and write**。PR のマージもするなら、さらに **Pull requests: Read and write**（検査を見るなら Checks・Commit statuses: Read-only）。Metadata: Read-only は自動で付く
    - Organization permissions: **Members: Read-only**（組織への所属を確かめるため）
    - 有効期限は短めに。組織の設定で承認が要る場合は、管理者の承認を待つ
 2. 公開したページを開き、トークンを入れて「表示する」
@@ -78,4 +81,4 @@ node --test test/
 
 - fine-grained のトークンで、組織への所属の確認（`/user/memberships/orgs/aiyzkn`、だめなら `/orgs/aiyzkn/members/<login>`）が通ること。API の呼び出しは、`gh` の認証（OAuth のトークン）で通ることを確かめました（2026-11-19）
 - ブラウザでの実際の表示（画面は、公開後に確かめる）
-- 書き込みを、実物の GitHub の API と書き込みの権限のあるトークンで行うこと。API を偽物に差し替えたブラウザ（Playwright・Chromium）で、ドラッグ・キーボードでの並べ替え、回答と状態の書き換え、変更が無いとき、送る間の競合（422）、読んだ後の変更の検出、書き込みの権限が無いときの表示を確かめました（2026-11-20）
+- 書き込みを、実物の GitHub の API と書き込みの権限のあるトークンで行うこと。API を偽物に差し替えたブラウザ（Playwright・Chromium）で、ドラッグ・キーボードでの並べ替え、回答と状態の書き換え、変更が無いとき、送る間の競合（422）、読んだ後の変更の検出、書き込みの権限が無いときの表示、PR のマージ（検査の失敗・マージ済みでは押せない、良い PR を squash でマージ → head の sha を付けて送り、タスクのログに記録）を確かめました（2026-11-20）

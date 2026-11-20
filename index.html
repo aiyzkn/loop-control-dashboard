@@ -12,7 +12,7 @@
 <body>
   <header>
     <h1>loop-control ダッシュボード</h1>
-    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を表示します。トークンに書き込みの権限があれば、タスクの書き換え・並べ替えもできます（送る前に差分を見せます）。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
+    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を表示します。トークンに書き込みの権限があれば、タスクの書き換え・並べ替え・PR のマージもできます（送る前に差分を見せます）。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
   </header>
 
   <section class="auth">
@@ -29,7 +29,7 @@
       <ol>
         <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
         <li>Resource owner: <code>aiyzkn</code>。Repository access: Only select repositories → <code>loop-control</code></li>
-        <li>Repository permissions: 見るだけなら <strong>Contents: Read-only</strong>、書き換え・並べ替えもするなら <strong>Contents: Read and write</strong>（Metadata: Read-only は自動で付く）</li>
+        <li>Repository permissions: 見るだけなら <strong>Contents: Read-only</strong>、書き換え・並べ替えもするなら <strong>Contents: Read and write</strong>。PR のマージもするなら、作業対象のリポジトリも対象に入れ、<strong>Pull requests: Read and write</strong>（検査を見るなら Checks・Commit statuses: Read-only）。Metadata: Read-only は自動で付く</li>
         <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
         <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
       </ol>
