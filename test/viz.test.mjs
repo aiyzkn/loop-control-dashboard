@@ -76,8 +76,8 @@ test('ganttRows は始まり〜終わりを窓の中の位置にし、進行中�
     { id: 'd', status: 'ready', created: 'x' },
     { id: 'e', status: 'ready', created: '2026-11-11T00:00:00+09:00' },
   ], from, to);
-  assert.deepEqual(rows.map((r) => r.id), ['e', 'a', 'b']);
-  const a = rows[1];
+  assert.deepEqual(rows.map((r) => r.id), ['a', 'e', 'b']);
+  const a = rows[0];
   assert.equal(a.x0, 0.5); assert.equal(a.x1, 1); assert.equal(a.hb, 0.8); assert.equal(a.clipped, false);
   const b = rows[2];
   assert.equal(b.x0, 0); assert.equal(b.clipped, true); assert.equal(b.status, 'done'); assert.equal(b.x1, 0.2);
