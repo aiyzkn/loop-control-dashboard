@@ -183,3 +183,61 @@ test('マージしてよいかの判定', () => {
   assert.match(mergeVerdict(pr, { state: 'failure', failed: ['test'] }).reasons[0], /test/);
   assert.equal(mergeVerdict(null, null).ok, false);
 });
+
+// ---- 依頼の登録 ----
+import { normalizeSlug, newTaskId, safeBody, inboxEntry, appendToInbox, renderTask, isProjectName } from '../edit.js';
+import { parseInbox, parseTask as parseTask2 } from '../parse.js';
+
+test('normalizeSlug は new-task.ps1 と同じ形にする', () => {
+  assert.equal(normalizeSlug(' UI Audit!! '), 'ui-audit');
+  assert.equal(normalizeSlug('日本語だけ'), '');
+  assert.equal(normalizeSlug('a'.repeat(50)).length, 40);
+});
+
+test('newTaskId は同じ名前があれば -2, -3 を付ける', () => {
+  const d = new Date(2026, 10, 20);
+  assert.equal(newTaskId('x', [], d), '20261120-x');
+  assert.equal(newTaskId('x', ['20261120-x', '20261120-x-2'], d), '20261120-x-3');
+});
+
+test('safeBody は行頭の # とコードの囲みを無効にし、制御文字を除く', () => {
+  assert.equal(safeBody('a\r\n## ログ\n```\nb\u0007\n\n'), 'a\n\\## ログ\n\\`\\`\\`\nb');
+});
+
+test('isProjectName は案件の名前だけを通す', () => {
+  assert.ok(isProjectName('loop-kit'));
+  assert.ok(isProjectName('i-co'));
+  assert.ok(!isProjectName('../x'));
+  assert.ok(!isProjectName('..'));
+  assert.ok(!isProjectName(''));
+});
+
+test('inboxEntry → appendToInbox で、受付の件として読める', () => {
+  const inbox = '# 受付\n\n## 手が空いた時に実行するタスク\n\n### vanilla: x\n段階: 提案だけ\n\n<!-- ここから下に追記 -->\n';
+  const entry = inboxEntry({ project: 'loop-kit', title: '件名\nです', stage: 'implement', priority: 'urgent', assignee: 'any', body: '本文\n## 見出し' });
+  assert.equal(entry, '## loop-kit: 件名 です\n段階: 実装まで\n優先: 緊急\n\n本文\n\\## 見出し');
+  const out = appendToInbox(inbox, entry);
+  assert.ok(out.endsWith('<!-- ここから下に追記 -->\n\n' + entry + '\n'));
+  const parsed = parseInbox(out);
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].heading, 'loop-kit: 件名 です');
+  assert.equal(parsed.items[0].urgent, true);
+  assert.equal(parsed.idle.length, 1);
+  assert.match(inboxEntry({ project: '新規', title: 't', stage: 'propose', priority: 'normal', assignee: 'claude' }), /^## 新規: t\n段階: 提案だけ\n担当: claude\n優先: 普通$/);
+  assert.throws(() => inboxEntry({ project: '', title: 't' }));
+  assert.throws(() => inboxEntry({ project: 'a', title: ' ' }));
+});
+
+test('renderTask はひな形を埋め、タスクとして読める', () => {
+  const tpl = '---\nid: {{id}}\ntitle: {{title}}\nproject: {{project}}\nstatus: ready\nstage: {{stage}}\npriority: {{priority}}\norder:\nassignee: {{assignee}}\nclaimed_by:\nsource: {{source}}\ncreated: {{now}}\nupdated: {{now}}\n---\n\n# {{title}}\n\n## 依頼（原文）\n\n{{request}}\n\n## ログ\n\n- {{now}} [{{agent}}] 起票（{{source}}）\n';
+  const text = renderTask(tpl, { id: '20261120-x', title: 'T', project: 'loop-kit', stage: 'propose', priority: 'low', assignee: '', request: '## ログ を壊さない', now: '2026-11-20T10:00:00+09:00', agent: 'dashboard:u' });
+  assert.ok(!text.includes('{{'));
+  assert.match(text, /\n\\## ログ を壊さない\n/);
+  assert.match(text, /- 2026-11-20T10:00:00\+09:00 \[dashboard:u\] 起票（direct）/);
+  const t = parseTask2('projects/loop-kit/tasks/20261120-x.md', text);
+  assert.equal(t.status, 'ready');
+  assert.equal(t.priority, 'low');
+  assert.equal(t.assignee, 'any');
+  assert.throws(() => renderTask(tpl, { id: 'x', title: 'T', project: 'loop-kit', stage: 'x', priority: 'low' }));
+  assert.throws(() => renderTask('no placeholders', { id: 'x', title: 'T', project: 'loop-kit', stage: 'propose', priority: 'low' }));
+});

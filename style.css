@@ -152,7 +152,9 @@ dialog h2 { margin-top: 0; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .field { display: flex; flex-direction: column; gap: 2px; }
-.field input, .field select, .question input, .dlg-body > input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); width: 100%; }
+.field[hidden] { display: none; }
+.field textarea { font: inherit; resize: vertical; }
+.field input, .field select, .field textarea, .question input, .dlg-body > input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); width: 100%; }
 .question { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
 .question input { margin-top: 4px; }
 .diff-file { margin: 8px 0; }
