@@ -14,7 +14,7 @@ import {
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
-  calendarDays, sumDays, gridCells } from './viz.js';
+  calendarDays, sumDays, gridCells, timeTicks } from './viz.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -778,7 +778,7 @@ function renderVisuals({ open, files, projects, branch, now }) {
     el('div', { class: 'viz-block' }, el('h3', {}, 'カード（案件ごと）'), projectCards(rows, projLink, now)),
     el('div', { class: 'viz-block' }, el('h3', {}, 'マトリックス（案件 × 状態・優先度）'), taskMatrix(open, rows, projLink)),
     el('div', { class: 'viz-block' }, el('h3', {}, 'ツリーマップ（案件の大きさ = タスクの数。中は状態と完了）'), treemap(rows)),
-    el('div', { class: 'viz-block' }, el('h3', {}, `ガントチャート（直近 ${GANTT_DAYS} 日。起票から今・完了まで）`), ganttBlock({ open, files, branch, now })),
+    el('div', { class: 'viz-block' }, el('h3', {}, 'ガントチャート（起票から今・完了まで）'), ganttBlock({ open, files, branch, now })),
     el('div', { class: 'viz-block' }, el('h3', {}, `リボンチャート（直近 ${RIBBON_DAYS} 日の起票の累計。日ごとに多い案件が上）`), ribbonChart(files, now)),
     el('div', { class: 'viz-block' }, el('h3', {}, `GitHub の芝（組織 ${CONFIG.org} とメンバー。直近 1 年）`), contribBlock()),
   );
@@ -786,25 +786,29 @@ function renderVisuals({ open, files, projects, branch, now }) {
 
 // ---- ガントチャート ----
 
-const GANTT_DAYS = 14;
+const GANTT_PERIODS = [1, 3, 7, 14, 30];   // 期間の選択肢（日）。1 = 今日だけ（3 時間ごとの目盛り）
+const GANTT_DEFAULT = 14;
 const GANTT_LIMIT = 20;           // 最初に出す行の数（新しい順）。「すべて表示」で残りを開く（ブラウザに覚える）
-const GANTT_ARCHIVE_MAX = 40;    // 完了を読むのは、ID の日付が窓より 14 日前までのものを、新しい順にこの数まで
-let archivedCache = null;        // 読んだ完了のタスク（読み込みのたびに消す）
+const GANTT_ARCHIVE_MAX = 40;    // 完了を読むのは、ID の日付が窓の始まりより期間ぶん前までのものを、新しい順にこの数まで
+let archivedCache = null;        // 読んだ完了のタスク（パス → タスク。読み込みのたびに消す）
+
+const ganttDays = () => { const d = Number(prefs.get('ganttDays')); return GANTT_PERIODS.includes(d) ? d : GANTT_DEFAULT; };
 
 function ganttBlock({ open, files, branch, now }) {
   const box = el('div', {});
-  const win = dayWindow(GANTT_DAYS, now);
   const draw = () => {
-    const allRows = ganttRows([...open, ...(archivedCache || [])], win.from, win.to);
+    const days = ganttDays();
+    const win = dayWindow(days, now);
+    const allRows = ganttRows([...open, ...(archivedCache ? archivedCache.values() : [])], win.from, win.to);
     const showAll = !!prefs.get('ganttAll');
     const rows = showAll ? allRows : allRows.slice(0, GANTT_LIMIT);
     const LABEL = 220, W = 960, ROW = 22, TOP = 20;
     const X = (f) => LABEL + f * (W - LABEL - 8);
     const H = TOP + rows.length * ROW + 4;
-    const ticks = win.days.map((d, i) => {
-      const x = X(i / GANTT_DAYS);
+    const ticks = timeTicks(win.from, win.to, days).map((tk) => {
+      const x = X(tk.f);
       return svg('g', {}, svg('line', { x1: x.toFixed(1), y1: TOP - 4, x2: x.toFixed(1), y2: H, class: 'grid' }),
-        i % 2 === (GANTT_DAYS - 1) % 2 ? svg('text', { x: (x + 2).toFixed(1), y: 12, class: 'axis' }, `${Number(d.slice(4, 6))}/${Number(d.slice(6))}`) : null);
+        tk.label ? svg('text', { x: (x + 2).toFixed(1), y: 12, class: 'axis' }, tk.label) : null);
     });
     const bars = rows.map((r, i) => {
       const y = TOP + i * ROW;
@@ -822,37 +826,50 @@ function ganttBlock({ open, files, branch, now }) {
     const chart = rows.length
       ? svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'gantt', role: 'img', 'aria-label': `ガントチャート: ${allRows.length} 件のうち ${rows.length} 件` }, ...ticks, ...bars,
         svg('line', { x1: nowX, y1: TOP - 4, x2: nowX, y2: H, class: 'gantt-now' }))
-      : el('p', { class: 'note' }, `直近 ${GANTT_DAYS} 日に掛かるタスクはありません`);
+      : el('p', { class: 'note' }, `${periodLabel(days)}に掛かるタスクはありません`);
     const legend = el('div', { class: 'legend' }, ...OPEN_STATUSES.map((s) => el('span', {}, el('i', { class: `key st-${s}` }), STATUS_JA[s])),
       el('span', {}, el('i', { class: 'key done' }), '完了'), el('span', {}, el('i', { class: 'key hb' }), '最後の印'));
-    const cand = archivedCandidates(files.archived, win);
+    // 完了は、まだ読んでいないものだけを、押したときに読む（期間を延ばすと、足りない分だけを読む）
+    const missing = archivedCandidates(files.archived, win, days).filter((p) => !(archivedCache && archivedCache.has(p)));
     let more = null;
-    if (archivedCache === null && cand.length) {
-      more = el('button', { type: 'button', class: 'mini' }, `完了したタスクも読む（${cand.length} 件。API を ${cand.length} 回）`);
+    if (missing.length) {
+      more = el('button', { type: 'button', class: 'mini gantt-more' }, `完了したタスクも読む（${missing.length} 件。API を ${missing.length} 回）`);
       more.addEventListener('click', async () => {
         more.disabled = true; more.textContent = '読んでいます…';
         try {
-          const texts = await mapLimit(cand, 6, (p) => gh(ctx.token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${ctx.head.sha}`, { raw: true }).then((r) => r.body));
-          archivedCache = cand.map((p, i) => parseTask(p, texts[i]));
+          const texts = await mapLimit(missing, 6, (p) => gh(ctx.token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${ctx.head.sha}`, { raw: true }).then((r) => r.body));
+          archivedCache ||= new Map();
+          missing.forEach((p, i) => archivedCache.set(p, parseTask(p, texts[i])));
           draw();
         } catch (e) { more.disabled = false; more.textContent = `読めませんでした（${e.status || e.message}）。もう一度`; }
       });
     }
+    // 期間の切り替え（ブラウザに覚える）
+    const period = el('span', { class: 'gantt-period', role: 'group', 'aria-label': '期間' }, ...GANTT_PERIODS.map((d) => {
+      const b = el('button', { type: 'button', class: 'mini' + (d === days ? ' primary' : ''), 'aria-pressed': d === days ? 'true' : 'false' }, d === 1 ? '今日' : `${d} 日`);
+      b.addEventListener('click', () => { if (d !== days) { prefs.set('ganttDays', d); draw(); } });
+      return b;
+    }));
     let toggle = null;
     if (allRows.length > GANTT_LIMIT) {
       toggle = el('button', { type: 'button', class: 'mini gantt-toggle' }, showAll ? `新しい ${GANTT_LIMIT} 件だけにする` : `すべて表示（残り ${allRows.length - GANTT_LIMIT} 件）`);
       toggle.addEventListener('click', () => { prefs.set('ganttAll', !showAll); draw(); });
     }
     const count = el('span', { class: 'sub' }, allRows.length > GANTT_LIMIT ? `${allRows.length} 件のうち${showAll ? 'すべて' : `新しい ${rows.length} 件`}（進行中・待ちが先）` : `${allRows.length} 件`);
-    box.replaceChildren(...[legend, more ? el('p', {}, more) : null, el('div', { class: 'scroll' }, chart), el('p', { class: 'gantt-foot' }, count, toggle ? ' ' : null, toggle)].filter(Boolean));
+    box.replaceChildren(...[
+      el('div', { class: 'gantt-tools' }, el('span', { class: 'sub' }, `期間: ${periodLabel(days)}`), period),
+      legend, more ? el('p', {}, more) : null, el('div', { class: 'scroll' }, chart),
+      el('p', { class: 'gantt-foot' }, count, toggle ? ' ' : null, toggle)].filter(Boolean));
   };
   draw();
   return box;
 }
 
-// 完了（archive）のうち、ID の日付が窓の始まりの 14 日前以降のものを、新しい順に
-function archivedCandidates(paths, win) {
-  const from = new Date(win.from - GANTT_DAYS * 24 * 3600 * 1000);
+const periodLabel = (days) => (days === 1 ? '今日' : `直近 ${days} 日`);
+
+// 完了（archive）のうち、ID の日付が窓の始まりより期間ぶん前以降のものを、新しい順に
+function archivedCandidates(paths, win, days) {
+  const from = new Date(win.from - days * 24 * 3600 * 1000);
   const min = `${from.getFullYear()}${String(from.getMonth() + 1).padStart(2, '0')}${String(from.getDate()).padStart(2, '0')}`;
   return paths.filter((p) => { const m = /\/archive\/(\d{8})-/.exec(p); return m && m[1] >= min; })
     .sort((a, b) => b.split('/').pop().localeCompare(a.split('/').pop())).slice(0, GANTT_ARCHIVE_MAX);

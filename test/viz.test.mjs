@@ -131,3 +131,24 @@ test('gridCells は週を列、曜日を行にする', () => {
   const d = gridCells([{ date: '2026-11-03', count: 1 }]);   // 火曜から始まる
   assert.deepEqual([d[0].col, d[0].row], [0, 2]);
 });
+
+import { timeTicks } from '../viz.js';
+
+test('timeTicks は窓の長さで目盛りの細かさを変える', () => {
+  const now = new Date(2026, 10, 20, 10, 0).getTime();
+  const one = dayWindow(1, now);
+  const t1 = timeTicks(one.from, one.to, 1);
+  assert.deepEqual(t1.map((x) => x.label), ['0時', '3時', '6時', '9時']);
+  assert.equal(t1[0].f, 0);
+  assert.ok(Math.abs(t1[3].f - 0.9) < 1e-9);
+  const w7 = dayWindow(7, now);
+  assert.equal(timeTicks(w7.from, w7.to, 7).filter((x) => x.label).length, 7);
+  const w14 = dayWindow(14, now);
+  const t14 = timeTicks(w14.from, w14.to, 14);
+  assert.equal(t14.length, 14); assert.equal(t14[13].label, '11/20'); assert.equal(t14[12].label, '');
+  const w30 = dayWindow(30, now);
+  const t30 = timeTicks(w30.from, w30.to, 30);
+  assert.equal(t30.filter((x) => x.label).length, 6); assert.equal(t30[29].label, '11/20');
+  // 位置は実際の時刻の割合（今日の 0 時は窓の端ではない）
+  assert.ok(t14[13].f < 1 && t14[13].f > 0.9);
+});
