@@ -2,7 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseTask, parseQuestions, sortTasks, parseOrder } from '../parse.js';
-import { setFrontMatter, appendLog, setAnswer, planReorder, priorityColumns, isoLocal, lineDiff, commitMessage, oneLine, applyTaskEdits } from '../edit.js';
+import { setFrontMatter, appendLog, setAnswer, planReorder, priorityColumns, isoLocal, lineDiff, commitMessage, oneLine, applyTaskEdits,
+  parsePrUrl, summarizeChecks, mergeVerdict } from '../edit.js';
 
 const task = `---
 id: 20261120-demo
@@ -152,4 +153,33 @@ test('時刻・差分・コミットのメッセージ', () => {
   assert.deepEqual(lineDiff('a', 'a'), [{ kind: '…', text: '' }]);
   assert.equal(commitMessage('yzkn', '並べ替え', ['t1', 't2']), '[dashboard:yzkn] 並べ替え t1 t2');
   assert.equal(commitMessage('a b', '書き換え', ['1', '2', '3', '4', '5']), '[dashboard:unknown] 書き換え 1 2 3 ほか 2 件');
+});
+
+test('PR の URL を分ける（GitHub だけ）', () => {
+  assert.deepEqual(parsePrUrl('https://github.com/aiyzkn/GeoEdit/pull/21'), { owner: 'aiyzkn', repo: 'GeoEdit', number: 21 });
+  assert.equal(parsePrUrl('https://gitlab.com/a/b/-/merge_requests/3'), null);
+  assert.equal(parsePrUrl('https://github.com/a/../pull/1'), null);
+  assert.equal(parsePrUrl('https://github.com/a/b/pull/1/files'), null);
+});
+
+test('検査の結果をまとめる', () => {
+  const runs = [{ name: 'test', status: 'completed', conclusion: 'success' }, { name: 'lint', status: 'completed', conclusion: 'skipped' }];
+  assert.equal(summarizeChecks(runs, null).state, 'success');
+  assert.equal(summarizeChecks([...runs, { name: 'e2e', status: 'in_progress', conclusion: null }], null).state, 'pending');
+  const bad = summarizeChecks(runs, { statuses: [{ context: 'ci/x', state: 'failure' }] });
+  assert.equal(bad.state, 'failure');
+  assert.deepEqual(bad.failed, ['ci/x']);
+  assert.equal(summarizeChecks(null, null).state, 'none');
+});
+
+test('マージしてよいかの判定', () => {
+  const pr = { state: 'open', merged: false, draft: false, mergeable: true, mergeable_state: 'clean' };
+  assert.deepEqual(mergeVerdict(pr, { state: 'success', failed: [] }), { ok: true, reasons: [] });
+  assert.equal(mergeVerdict(pr, { state: 'none', failed: [] }).ok, true);
+  assert.equal(mergeVerdict({ ...pr, merged: true, state: 'closed' }, null).merged, true);
+  assert.equal(mergeVerdict({ ...pr, mergeable: false, mergeable_state: 'dirty' }, null).ok, false);
+  assert.equal(mergeVerdict({ ...pr, mergeable: null }, null).ok, false);
+  assert.equal(mergeVerdict({ ...pr, draft: true }, null).ok, false);
+  assert.match(mergeVerdict(pr, { state: 'failure', failed: ['test'] }).reasons[0], /test/);
+  assert.equal(mergeVerdict(null, null).ok, false);
 });

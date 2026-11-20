@@ -10,6 +10,7 @@ import {
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
+  MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict,
 } from './edit.js';
 
 const CONFIG = {
@@ -557,7 +558,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
           el('td', {}, link(blobUrl(branch, t.path), t.title || t.id), el('div', { class: 'sub' }, t.id)),
           el('td', {}, t.stage),
           el('td', {}, agentLink(who, roster, branch, files), el('div', { class: 'sub' }, t.heartbeatAt ? '印 ' + ageText(t.heartbeatAt) : '')),
-          el('td', {}, prs.length ? el('ul', { class: 'prs' }, ...prs.map((x) => el('li', {}, link(x.url, x.label)))) : el('span', { class: 'sub' }, '—')),
+          el('td', {}, prs.length ? el('ul', { class: 'prs' }, ...prs.map((x) => el('li', {}, link(x.url, x.label), parsePrUrl(x.url) ? mergeButton(t, x) : null))) : el('span', { class: 'sub' }, '—')),
           el('td', {}, t.progress, el('div', { class: 'sub' }, t.next ? '次: ' + t.next : '')),
           ctx.canWrite ? el('td', {}, editButton(t)) : null);
       })),
@@ -602,6 +603,96 @@ function editButton(t) {
   const b = el('button', { type: 'button', class: 'mini' + (unanswered ? ' primary' : '') }, unanswered ? `回答する（${unanswered}）` : '書き換える');
   b.addEventListener('click', () => openEditor(t));
   return b;
+}
+
+// ---- PR のマージ（GitHub の PR だけ） ----
+
+function mergeButton(t, x) {
+  const b = el('button', { type: 'button', class: 'mini', title: `${x.label} の状態を見て、マージする`, 'aria-label': `${x.label} の状態を見る` }, '状態・マージ');
+  b.addEventListener('click', () => openMerge(t, x));
+  return b;
+}
+
+// PR の状態・検査を読み、確認のあとマージする。マージしたら、タスクのログに 1 行（1 コミット）
+async function openMerge(t, x) {
+  if (!ctx || busy) return;
+  const pr = parsePrUrl(x.url);
+  if (!pr) return;
+  const dlg = $('dialog');
+  const msg = el('p', { class: 'status', role: 'status' }, '読んでいます…');
+  const cancel = el('button', { type: 'button' }, '閉じる');
+  cancel.addEventListener('click', () => dlg.close());
+  dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), msg, el('div', { class: 'dlg-actions' }, cancel));
+  if (!dlg.open) dlg.showModal();
+  const api = `/repos/${pr.owner}/${pr.repo}`;
+  let info;
+  let checks = null;
+  try {
+    info = (await gh(ctx.token, `${api}/pulls/${pr.number}`)).body;
+    if (!info.merged && info.head && info.head.sha) {
+      const sha = info.head.sha;
+      const [runs, status] = await Promise.all([
+        gh(ctx.token, `${api}/commits/${sha}/check-runs?per_page=100`, { allow404: true }).then((r) => (r.body ? r.body.check_runs : null)),
+        gh(ctx.token, `${api}/commits/${sha}/status`, { allow404: true }).then((r) => r.body),
+      ]);
+      checks = runs || status ? summarizeChecks(runs, status) : null;
+    }
+  } catch (e) {
+    msg.className = 'status error';
+    msg.textContent = e.status === 404 || e.status === 403
+      ? `${pr.owner}/${pr.repo} の PR を読めません（${e.status}）。トークンの対象リポジトリに ${pr.owner}/${pr.repo} を入れ、Pull requests の権限を付けてください`
+      : (e.message || String(e));
+    return;
+  }
+  const v = mergeVerdict(info, checks);
+  const CHECK_JA = { success: '成功', failure: '失敗あり', pending: '終わっていない', none: '検査なし（または読めない）' };
+  const facts = el('dl', { class: 'facts' },
+    el('dt', {}, '件名'), el('dd', {}, link(x.url, info.title || x.label)),
+    el('dt', {}, '状態'), el('dd', {}, info.merged ? `マージ済み（${info.merged_at || ''}）` : info.state === 'open' ? (info.draft ? '開いている（下書き）' : '開いている') : '閉じている'),
+    el('dt', {}, 'ブランチ'), el('dd', {}, `${info.base ? info.base.ref : '?'} ← ${info.head ? info.head.ref : '?'}`),
+    el('dt', {}, 'マージできるか'), el('dd', {}, `${info.mergeable === true ? 'できる' : info.mergeable === false ? 'できない' : '計算中'}（${info.mergeable_state || '?'}）`),
+    el('dt', {}, '検査'), el('dd', {}, checks ? `${CHECK_JA[checks.state]}（成功 ${checks.success}・失敗 ${checks.failure}・途中 ${checks.pending}）` : CHECK_JA.none),
+    el('dt', {}, '変更'), el('dd', {}, `${info.changed_files ?? '?'} ファイル・+${info.additions ?? '?'} / -${info.deletions ?? '?'}・コミット ${info.commits ?? '?'}`));
+  msg.className = 'status' + (v.ok ? '' : ' error');
+  msg.textContent = v.ok ? 'マージできます。方法を選んで「マージする」を押すと、すぐにマージします（取り消せません）' : v.reasons.join(' / ');
+  const method = el('select', { name: 'method' }, ...MERGE_METHODS.map((m) => el('option', { value: m }, { merge: 'マージコミット（merge）', squash: 'まとめる（squash）', rebase: '付け替え（rebase）' }[m])));
+  const go = el('button', { type: 'button', class: 'primary' }, 'マージする');
+  go.disabled = !v.ok;
+  go.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true; go.disabled = true; cancel.disabled = true;
+    msg.className = 'status'; msg.textContent = 'マージしています…';
+    let merged;
+    try {
+      // head の sha を付ける: 見た後に push が入っていたら、GitHub が断る（409）
+      merged = (await gh(ctx.token, `${api}/pulls/${pr.number}/merge`, { method: 'PUT', body: { sha: info.head.sha, merge_method: method.value } })).body;
+    } catch (e) {
+      busy = false; cancel.disabled = false;
+      msg.className = 'status error';
+      msg.textContent = e.status === 409 ? '見た後に PR の内容が変わりました。閉じて開き直してください'
+        : e.status === 405 ? `マージできませんでした（405${e.detail ? `: ${e.detail}` : ''}）`
+          : e.status === 403 || e.status === 404 ? `マージの権限がありません（${e.status}）。トークンに ${pr.owner}/${pr.repo} の Contents と Pull requests の Read and write が要ります`
+            : (e.message || String(e));
+      return;
+    }
+    // タスクのログに残す（書き込みの権限があるときだけ）
+    let logNote = '';
+    if (ctx.canWrite) {
+      const before = ctx.texts.get(t.path);
+      const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）` }, { who: WHO() }).text;
+      try { await commitChanges([{ path: t.path, content: after }], commitMessage(ctx.login, 'PR のマージを記録', [t.id])); logNote = 'タスクのログに記録しました'; }
+      catch (e) { logNote = `タスクのログには書けませんでした（${e.message}）。手で記録してください`; }
+    } else logNote = '書き込みの権限が無いので、タスクのログには書いていません';
+    busy = false; cancel.disabled = false;
+    msg.className = 'status ok';
+    msg.textContent = `マージしました（${String(merged.sha || '').slice(0, 7)}）。${logNote}`;
+    go.remove();
+    method.remove();
+    load(ctx.token).catch(showError);
+  });
+  dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), el('div', { class: 'dlg-body' }, facts,
+    el('p', { class: 'sub' }, `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`)),
+  msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go));
 }
 
 function showError(e) {
