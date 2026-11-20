@@ -35,9 +35,10 @@
           <ul>
             <li><strong>Contents: Read and write</strong> … タスクの表示と、書き換え・並べ替え（1 回の操作 = 1 コミット）。PR のマージにも要る</li>
             <li><strong>Pull requests: Read and write</strong> … PR の状態を読み、マージする</li>
-            <li><strong>Checks: Read-only</strong>・<strong>Commit statuses: Read-only</strong> … マージの前に検査の結果を見る（無いと「検査なし（または読めない）」と出る）</li>
+            <li><strong>Commit statuses: Read-only</strong> … マージの前に、コミットの状態（commit status）で検査の結果を見る</li>
             <li>Metadata: Read-only は自動で付く</li>
           </ul>
+          <p class="note">fine-grained のトークンには Checks の権限がありません（GitHub の制限。Actions の権限でも代わりになりません）。そのため、GitHub Actions などの check run の結果は読めず、commit status を使わない検査は「検査なし（または読めない）」と出ます。マージの前に、PR の画面で検査を確かめてください。</p>
         </li>
         <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
         <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>

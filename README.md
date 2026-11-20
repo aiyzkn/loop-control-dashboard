@@ -47,7 +47,7 @@
 - `status` を `done`・`dropped` にしても、`archive/` への移動と担当の解放はしません（エージェントの `finish` で行います）。`urgent` に上げてよいのは利用者だけ（`AGENTS.md` 7.1）なので、このページを使う人が判断します
 - 並びの `order` は、auto-loop スキルの `status.ps1`・`kick.ps1` の並べ方に入れる変更（aiyzkn/auto-loop-engineering）と合わせて使います。スクリプトが `order` を知らない間は、ダッシュボードの中だけの並びです
 - PR のマージは、PR の状態（開いているか・下書きか・マージできるか・ブランチの保護）と検査（check runs・commit status）を読んで見せ、問題があれば「マージする」を押せないようにします。マージは、見たときの head のコミットを付けて送るので、見た後に push が入っていたら GitHub が断ります（409）。方法は merge / squash / rebase から選びます。マージの後の `finish`（タスクの完了・片付け）はしません。エージェントが再開するときに確かめます
-- PR のマージには、トークンの対象リポジトリに作業対象のリポジトリも入れ、`Contents: Read and write` と `Pull requests: Read and write` を付けます（検査を見るには `Checks: Read-only`・`Commit statuses: Read-only` も。無ければ「検査なし（または読めない）」と出ます）。GitLab の MR は、トークンが別なので対象外です
+- PR のマージには、トークンの対象リポジトリに作業対象のリポジトリも入れ、`Contents: Read and write` と `Pull requests: Read and write` を付けます（検査を見るには `Commit statuses: Read-only` も。fine-grained のトークンには Checks の権限が無いので、check run の結果は読めず、commit status の無い検査は「検査なし（または読めない）」と出ます）。GitLab の MR は、トークンが別なので対象外です
 - 書き込みの権限は、リポジトリの情報（`permissions.push`）で見分けます。fine-grained のトークンの権限そのものは、ここに出ないので、`Contents: Read-only` のトークンでは「送る」で 403 になります
 
 ## 使い方
@@ -58,7 +58,8 @@
    - Repository permissions:
      - **Contents: Read and write** … タスクの表示と、書き換え・並べ替え。PR のマージにも要る
      - **Pull requests: Read and write** … PR の状態を読み、マージする
-     - **Checks: Read-only**・**Commit statuses: Read-only** … マージの前に検査の結果を見る（無いと「検査なし（または読めない）」と出る）
+     - **Commit statuses: Read-only** … マージの前に、コミットの状態（commit status）で検査の結果を見る
+     - fine-grained のトークンには Checks の権限が無い（GitHub の制限。Actions の権限でも代わりにならない）。GitHub Actions などの check run の結果は読めず、commit status を使わない検査は「検査なし（または読めない）」と出る。マージの前に PR の画面で確かめる
      - Metadata: Read-only は自動で付く
    - Organization permissions: **Members: Read-only**（組織への所属を確かめるため）
    - 有効期限は短めに。組織の設定で承認が要る場合は、管理者の承認を待つ
