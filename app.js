@@ -13,6 +13,7 @@ import {
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
+import { OPEN_STATUSES, projectSummary, matrix, shade, squarify } from './viz.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -592,6 +593,9 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     el('div', { class: 'chart' }, el('h3', {}, '直近 14 日の起票と完了（タスク ID の日付）'), dayChart(countByDay(paths, 14, now))),
   );
 
+  // ビジュアル（カード・マトリックス・ツリーマップ）
+  renderVisuals({ open, files, projects, branch, now });
+
   // PC
   const pcBody = $('pcs');
   if (pcs.length === 0) {
@@ -760,6 +764,94 @@ async function submitNewRequest(f, msg, form) {
   const tpl = (await gh(ctx.token, `${REPO()}/contents/templates/task.md?ref=${ctx.head.sha}`, { raw: true })).body;
   const text = renderTask(tpl, { ...v, id, source: 'direct', request: v.body, now: isoLocal(), agent: WHO() });
   confirmAndSend(`タスクの作成の確認: ${id}`, [{ path: `${prefix}tasks/${id}.md`, before: '', after: text }], commitMessage(ctx.login, '起票', [id]), opts);
+}
+
+// ---- ビジュアル（見栄えのための部品。データはいまの一覧だけ。外部のライブラリは使わず DOM と SVG） ----
+
+function renderVisuals({ open, files, projects, branch, now }) {
+  const rows = projectSummary(open, files.archived, [...projects.keys()]);
+  const projLink = (id, cls) => { const p = projects.get(id); return link(p ? blobUrl(branch, p.path) : '', id, cls); };
+  $('visuals').replaceChildren(
+    el('div', { class: 'viz-block' }, el('h3', {}, 'カード（案件ごと）'), projectCards(rows, projLink, now)),
+    el('div', { class: 'viz-block' }, el('h3', {}, 'マトリックス（案件 × 状態・優先度）'), taskMatrix(open, rows, projLink)),
+    el('div', { class: 'viz-block' }, el('h3', {}, 'ツリーマップ（案件の大きさ = タスクの数。中は状態と完了）'), treemap(rows)),
+  );
+}
+
+// 案件ごとのカード: 進行中・待ちの数を大きく、完了・高以上・最終更新、状態の細い帯
+function projectCards(rows, projLink, now) {
+  const shown = rows.filter((r) => r.total > 0);
+  if (!shown.length) return el('p', { class: 'note' }, 'タスクがありません');
+  return el('div', { class: 'pcards' }, ...shown.map((r) => {
+    const W = 100;
+    let x = 0;
+    const segs = [];
+    for (const s of [...OPEN_STATUSES, 'done']) {
+      const n = s === 'done' ? r.done : r.counts[s];
+      if (!n) continue;
+      const w = (n / r.total) * W;
+      segs.push(svg('rect', { x: x.toFixed(2), y: 0, width: w.toFixed(2), height: 6, class: s === 'done' ? 'seg done' : `seg st-${s}` }, svg('title', {}, `${s === 'done' ? '完了' : STATUS_JA[s]} ${n} 件`)));
+      x += w;
+    }
+    return el('div', { class: 'pcard' + (r.counts.blocked ? ' alert' : '') },
+      el('div', { class: 'pcard-head' }, projLink(r.project, 'pcard-name'), r.high ? el('span', { class: 'badge pr-high-badge' }, `高以上 ${r.high}`) : null),
+      el('div', { class: 'pcard-num' }, String(r.open), el('span', { class: 'sub' }, ' 件 進行中・待ち')),
+      svg('svg', { viewBox: `0 0 ${W} 6`, preserveAspectRatio: 'none', class: 'pcard-bar', role: 'img', 'aria-label': `${r.project}: ` + [...OPEN_STATUSES.filter((s) => r.counts[s]).map((s) => `${STATUS_JA[s]} ${r.counts[s]}`), r.done ? `完了 ${r.done}` : ''].filter(Boolean).join('、') }, ...segs),
+      el('div', { class: 'sub' }, `完了 ${r.done} 件`, r.latest ? ` ・ 更新 ${ageText(r.latest, now)}` : ''));
+  }));
+}
+
+// マトリックス: 行 = 案件、列 = 状態と優先度。セルの濃さ = 件数
+function taskMatrix(open, rows, projLink) {
+  const ids = rows.filter((r) => r.open > 0).map((r) => r.project);
+  if (!ids.length) return el('p', { class: 'note' }, '進行中・待ちのタスクはありません');
+  const byStatus = matrix(open, ids, OPEN_STATUSES, (t) => [t.project, t.status]);
+  const byPriority = matrix(open, ids, PRIORITIES, (t) => [t.project, PRIORITIES.includes(t.priority) ? t.priority : 'normal']);
+  const cell = (v, max, cls) => {
+    const td = el('td', { class: `mx-cell ${cls}` + (v ? '' : ' zero') }, v ? String(v) : '·');
+    td.style.setProperty('--a', String(shade(v, max)));
+    return td;
+  };
+  const cols = [...byStatus.cols.map((c) => ({ label: STATUS_JA[c], cls: `mx-st st-${c}` })), ...byPriority.cols.map((c) => ({ label: PRIORITY_JA[c], cls: `mx-pr pr-${c}` }))];
+  return el('div', { class: 'scroll' }, el('table', { class: 'matrix' },
+    el('thead', {},
+      el('tr', {}, el('th', { rowspan: '2' }, '案件'), el('th', { colspan: String(OPEN_STATUSES.length), class: 'mx-group' }, '状態'), el('th', { colspan: String(PRIORITIES.length), class: 'mx-group' }, '優先度'), el('th', { rowspan: '2' }, '計')),
+      el('tr', {}, ...cols.map((c) => el('th', { class: c.cls }, c.label)))),
+    el('tbody', {}, ...ids.map((id, i) => el('tr', {},
+      el('th', { scope: 'row' }, projLink(id)),
+      ...byStatus.cells[i].map((v) => cell(v, byStatus.max, 'mx-st')),
+      ...byPriority.cells[i].map((v, j) => cell(v, byPriority.max, `mx-pr pr-${PRIORITIES[j]}`)),
+      el('td', { class: 'mx-total' }, String(byStatus.rowTotal[i]))))),
+    el('tfoot', {}, el('tr', {}, el('th', {}, '計'),
+      ...byStatus.colTotal.map((v) => el('td', { class: 'mx-total' }, String(v))),
+      ...byPriority.colTotal.map((v) => el('td', { class: 'mx-total' }, String(v))),
+      el('td', { class: 'mx-total' }, String(byStatus.total))))));
+}
+
+// ツリーマップ: 案件の大きさ = タスクの数（進行中・待ち + 完了）。中を状態と完了で分ける
+function treemap(rows) {
+  // 画面の幅に合わせて描く（縮めて表示すると、スマートフォンで文字が読めないほど小さくなるため）
+  const W = Math.round(Math.min(960, Math.max(300, (document.documentElement.clientWidth || 960) - 32)));
+  const H = W < 600 ? Math.round(W * 0.9) : 360, HEAD = 18;
+  const outer = squarify(rows.map((r) => ({ key: r.project, value: r.total })), 0, 0, W, H);
+  if (!outer.length) return el('p', { class: 'note' }, 'タスクがありません');
+  const byId = new Map(rows.map((r) => [r.project, r]));
+  const g = [];
+  for (const o of outer) {
+    const r = byId.get(o.key);
+    const pad = 2;
+    const showHead = o.h > HEAD * 2 && o.w > 48;
+    const ix = o.x + pad, iy = o.y + pad + (showHead ? HEAD : 0), iw = Math.max(o.w - pad * 2, 0), ih = Math.max(o.h - pad * 2 - (showHead ? HEAD : 0), 0);
+    const inner = squarify([...OPEN_STATUSES.map((s) => ({ key: s, value: r.counts[s] })), { key: 'done', value: r.done }], ix, iy, iw, ih);
+    const tip = `${r.project}: 全 ${r.total} 件（` + [...OPEN_STATUSES.filter((s) => r.counts[s]).map((s) => `${STATUS_JA[s]} ${r.counts[s]}`), r.done ? `完了 ${r.done}` : ''].filter(Boolean).join('・') + '）';
+    g.push(svg('g', { class: 'tm-node' },
+      svg('title', {}, tip),
+      svg('rect', { x: o.x.toFixed(1), y: o.y.toFixed(1), width: o.w.toFixed(1), height: o.h.toFixed(1), class: 'tm-outer' }),
+      ...inner.map((i) => svg('rect', { x: (i.x + 0.5).toFixed(1), y: (i.y + 0.5).toFixed(1), width: Math.max(i.w - 1, 0).toFixed(1), height: Math.max(i.h - 1, 0).toFixed(1), class: i.key === 'done' ? 'tm-cell seg done' : `tm-cell seg st-${i.key}` })),
+      showHead ? svg('text', { x: (o.x + 6).toFixed(1), y: (o.y + 14).toFixed(1), class: 'tm-label' }, `${r.project}（${r.total}）`) : null));
+  }
+  const legend = el('div', { class: 'legend' }, ...OPEN_STATUSES.map((s) => el('span', {}, el('i', { class: `key st-${s}` }), STATUS_JA[s])), el('span', {}, el('i', { class: 'key done' }), '完了'));
+  return el('div', {}, legend, svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'treemap', role: 'img', 'aria-label': `案件ごとのタスクの数: ${rows.filter((r) => r.total).map((r) => `${r.project} ${r.total}`).join('、')}` }, ...g));
 }
 
 function editButton(t) {
