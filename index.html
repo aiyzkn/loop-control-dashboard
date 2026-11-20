@@ -12,7 +12,7 @@
 <body>
   <header>
     <h1>loop-control ダッシュボード</h1>
-    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を、<strong>参照だけ</strong>で表示します。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
+    <p class="note">指令リポジトリ <code id="repoName"></code> のタスクと PC の状況を表示します。トークンに書き込みの権限があれば、タスクの書き換え・並べ替えもできます（送る前に差分を見せます）。組織 <code id="orgName"></code> のメンバーだけが使えます。</p>
   </header>
 
   <section class="auth">
@@ -29,11 +29,11 @@
       <ol>
         <li>GitHub の Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
         <li>Resource owner: <code>aiyzkn</code>。Repository access: Only select repositories → <code>loop-control</code></li>
-        <li>Repository permissions: <strong>Contents: Read-only</strong>（Metadata: Read-only は自動で付く）</li>
+        <li>Repository permissions: 見るだけなら <strong>Contents: Read-only</strong>、書き換え・並べ替えもするなら <strong>Contents: Read and write</strong>（Metadata: Read-only は自動で付く）</li>
         <li>Organization permissions: <strong>Members: Read-only</strong>（組織への所属を確かめるため）</li>
         <li>有効期限は短めにする。組織の設定で承認が要る場合は、管理者の承認を待つ</li>
       </ol>
-      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。このページは書き込みをしません。</p>
+      <p class="note">トークンは、このブラウザの中（既定はタブを閉じるまで）にだけ置き、<code>api.github.com</code> にだけ送ります。書き込みは、確認の画面で「送る」を押したときだけです。</p>
     </details>
     <p id="status" class="status" role="status"></p>
   </section>
@@ -44,8 +44,10 @@
     <section><h2>グラフ</h2><div id="charts" class="charts"></div></section>
     <section><h2>PC の状況</h2><div id="pcs" class="scroll"></div></section>
     <section><h2>タスク（進行中・待ち）</h2><div id="tasks" class="scroll"></div></section>
+    <section><h2>並べ替え（優先度と順）</h2><div id="board"></div></section>
     <section><h2>案件とリポジトリ</h2><div id="projects" class="scroll"></div></section>
     <section><h2>受付</h2><div id="inbox"></div></section>
   </main>
+  <dialog id="dialog" aria-modal="true"></dialog>
 </body>
 </html>

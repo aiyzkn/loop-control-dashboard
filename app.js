@@ -1,5 +1,6 @@
-// loop-control ダッシュボード（参照だけ）。
+// loop-control ダッシュボード。
 // ブラウザから GitHub の API（https://api.github.com）を、利用者の fine-grained の個人用トークンで読む。
+// トークンに書き込みの権限があれば、タスクの書き換え・並べ替えを、確認の画面（差分）のあと 1 回 = 1 コミットで書く。
 // このページ（公開）には、データを置かない。読めるかどうかは、トークンの権限（非公開の loop-control を読めるか）で決まる。
 // 表示はすべて textContent と、組み立てた href（github.com / gitlab.com と、このリポジトリの blob だけ）で入れる。
 import {
@@ -7,6 +8,9 @@ import {
   parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal,
   countByProject, countByDay, doneRatio,
 } from './parse.js';
+import {
+  PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
+} from './edit.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -51,19 +55,25 @@ function clearToken() {
   try { sessionStorage.removeItem(KEY); localStorage.removeItem(KEY); } catch { }
 }
 
-async function gh(token, path, { raw = false, allow404 = false } = {}) {
+async function gh(token, path, { raw = false, allow404 = false, method = 'GET', body } = {}) {
   const res = await fetch(CONFIG.api + path, {
+    method,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     cache: 'no-store',
   });
   if (allow404 && (res.status === 404 || res.status === 403)) return { status: res.status, body: null };
   if (!res.ok) {
-    const err = new Error(`GitHub API ${res.status}: ${path}`);
+    let detail = '';
+    try { detail = (await res.json()).message || ''; } catch { }
+    const err = new Error(`GitHub API ${res.status}: ${method} ${path}${detail ? `（${detail}）` : ''}`);
     err.status = res.status;
+    err.detail = detail;
     throw err;
   }
   if (res.status === 204) return { status: 204, body: null };
@@ -101,10 +111,12 @@ async function load(token) {
   setStatus('読み込んでいます…');
   const repoInfo = (await gh(token, `/repos/${CONFIG.owner}/${CONFIG.repo}`)).body;
   const branch = repoInfo.default_branch;
-  const tree = (await gh(token, `/repos/${CONFIG.owner}/${CONFIG.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`)).body;
+  // 読んだ時点のコミットに固定して読む（書き込みのとき、ほかの変更との競合をこのコミットから見分ける）
+  const head = await headOf(token, branch);
+  const tree = (await gh(token, `${REPO()}/git/trees/${head.tree}?recursive=1`)).body;
   const entries = tree.tree || [];
   const files = pickFiles(entries);
-  const read = (p) => gh(token, `/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(branch)}`, { raw: true }).then((r) => r.body);
+  const read = (p) => gh(token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${head.sha}`, { raw: true }).then((r) => r.body);
   const [taskTexts, pcTexts, projectTexts, inboxText, rosterText] = await Promise.all([
     mapLimit(files.tasks, 6, read),
     mapLimit(files.pcs, 6, read),
@@ -117,13 +129,229 @@ async function load(token) {
   const pcs = pcTexts.map((t, i) => { try { return JSON.parse(t); } catch { return { agentId: files.pcs[i], error: '読めない' }; } });
   const inbox = parseInbox(inboxText);
   const roster = parseRoster(rosterText);
+  // 書き込みに使う、読んだ時点の状態
+  ctx = {
+    token, login: me.login, branch, head,
+    canWrite: !!(repoInfo.permissions && repoInfo.permissions.push),
+    blobs: new Map(entries.filter((e) => e.type === 'blob').map((e) => [e.path, e.sha])),
+    texts: new Map(files.tasks.map((p, i) => [p, taskTexts[i]])),
+    tasks,
+  };
   render({
     branch, tasks, pcs, inbox, projects, roster,
     archivedCount: files.archived.length,
     paths: entries.filter((e) => e.type === 'blob').map((e) => e.path),
     files, truncated: tree.truncated,
   });
-  setStatus(`${me.login} として表示しています（${new Date().toLocaleString()} 時点。自動では更新しません）`, 'ok');
+  setStatus(`${me.login} として表示しています（${new Date().toLocaleString()} 時点。自動では更新しません）${ctx.canWrite ? '。書き込みできます' : '。書き込みの権限が無いので、参照だけです'}`, 'ok');
+}
+
+// ---- 書き込み（1 回の操作 = 1 コミット。Git Data API） ----
+
+let ctx = null;          // 読んだ時点の状態（load が作る）
+let busy = false;        // 送っている間は、ほかの操作をしない
+const REPO = () => `/repos/${CONFIG.owner}/${CONFIG.repo}`;
+
+async function headOf(token, branch) {
+  const ref = (await gh(token, `${REPO()}/git/ref/heads/${encodeURIComponent(branch)}`)).body;
+  const commit = (await gh(token, `${REPO()}/git/commits/${ref.object.sha}`)).body;
+  return { sha: ref.object.sha, tree: commit.tree.sha };
+}
+
+class Conflict extends Error {}
+
+// changes = [{ path, content }]。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
+// ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む
+async function commitChanges(changes, message) {
+  const { token, branch } = ctx;
+  let base = await headOf(token, branch);
+  if (base.sha !== ctx.head.sha) {
+    const now = (await gh(token, `${REPO()}/git/trees/${base.tree}?recursive=1`)).body.tree || [];
+    const sha = new Map(now.map((e) => [e.path, e.sha]));
+    const moved = changes.filter((c) => sha.get(c.path) !== ctx.blobs.get(c.path)).map((c) => c.path);
+    if (moved.length) throw new Conflict(`読んだ後に、ほかで書き換えられています: ${moved.join('、')}`);
+  }
+  const tree = (await gh(token, `${REPO()}/git/trees`, {
+    method: 'POST',
+    body: { base_tree: base.tree, tree: changes.map((c) => ({ path: c.path, mode: '100644', type: 'blob', content: c.content })) },
+  })).body;
+  const commit = (await gh(token, `${REPO()}/git/commits`, { method: 'POST', body: { message, tree: tree.sha, parents: [base.sha] } })).body;
+  try {
+    await gh(token, `${REPO()}/git/refs/heads/${encodeURIComponent(branch)}`, { method: 'PATCH', body: { sha: commit.sha, force: false } });
+  } catch (e) {
+    // fast-forward にならない = 送る間に、ほかの push が入った。作ったコミットは捨てる（どこからも指されない）
+    if (e.status === 422) throw new Conflict('送っている間に、ほかの書き込みが入りました');
+    throw e;
+  }
+  return commit.sha;
+}
+
+// 確認の画面: 差分を見せ、「送る」でコミットする。items = [{ path, before, after }]
+function confirmAndSend(title, items, message) {
+  const dlg = $('dialog');
+  const body = el('div', { class: 'dlg-body' },
+    el('p', { class: 'sub' }, `コミット: ${message}`),
+    ...items.map((it) => el('div', { class: 'diff-file' },
+      el('div', { class: 'diff-path' }, link(blobUrl(ctx.branch, it.path), it.path)),
+      el('pre', { class: 'diff' }, ...lineDiff(it.before, it.after, 1).map((d) =>
+        el('span', { class: d.kind === '+' ? 'add' : d.kind === '-' ? 'del' : d.kind === '…' ? 'gap' : '' }, `${d.kind === '…' ? '…' : d.kind} ${d.text}\n`))))));
+  const msg = el('p', { class: 'status', role: 'status' });
+  const send = el('button', { type: 'button', class: 'primary' }, `送る（${items.length} ファイル・1 コミット）`);
+  const cancel = el('button', { type: 'button' }, 'やめる');
+  cancel.addEventListener('click', () => dlg.close());
+  send.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true; send.disabled = true; cancel.disabled = true;
+    msg.textContent = '送っています…'; msg.className = 'status';
+    try {
+      await commitChanges(items.map((it) => ({ path: it.path, content: it.after })), message);
+      dlg.close();
+      setStatus('書き込みました。読み直しています…', 'ok');
+      await load(ctx.token);
+    } catch (e) {
+      msg.className = 'status error';
+      msg.textContent = e instanceof Conflict
+        ? `${e.message}。上書きはしていません。「読み直す」で最新を読んでから、やり直してください`
+        : e.status === 403 || e.status === 404
+          ? `書き込めませんでした（${e.status}）。トークンに Contents: Read and write の権限があるか確かめてください`
+          : (e.message || String(e));
+    } finally {
+      busy = false; send.disabled = false; cancel.disabled = false;
+    }
+  });
+  dlg.replaceChildren(el('h2', {}, title), body, msg, el('div', { class: 'dlg-actions' }, cancel, send));
+  if (!dlg.open) dlg.showModal();
+}
+
+const WHO = () => `dashboard:${ctx.login}`;
+
+// タスクの書き換えの画面（先頭の priority・status・stage・assignee、質問への回答、ログのメモ）
+function openEditor(t) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  const text = ctx.texts.get(t.path);
+  const dlg = $('dialog');
+  const select = (name, values, cur, labels = {}) => {
+    const s = el('select', { name });
+    for (const v of values) { const o = el('option', { value: v }, labels[v] ? `${labels[v]}（${v}）` : v); if (v === cur) o.selected = true; s.append(o); }
+    if (!values.includes(cur)) { const o = el('option', { value: cur }, cur || '（なし）'); o.selected = true; s.prepend(o); }
+    return s;
+  };
+  const f = {
+    priority: select('priority', PRIORITIES, t.priority, PRIORITY_JA),
+    status: select('status', STATUSES, t.status, STATUS_JA),
+    stage: select('stage', STAGES, t.stage),
+    assignee: el('input', { name: 'assignee', value: t.assignee, spellcheck: 'false' }),
+  };
+  const answers = t.questions.map((q) => ({ q, input: el('input', { name: q.id, placeholder: q.answer ? '置き換えるときだけ書く' : '回答を書く', spellcheck: 'false' }) }));
+  const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ。空なら変更の要約', spellcheck: 'false' });
+  const row = (label, input, sub) => el('label', { class: 'field' }, el('span', {}, label), input, sub ? el('span', { class: 'sub' }, sub) : null);
+  const msg = el('p', { class: 'status', role: 'status' });
+  const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
+  const cancel = el('button', { type: 'button' }, 'やめる');
+  cancel.addEventListener('click', () => dlg.close());
+  next.addEventListener('click', () => {
+    const ans = {};
+    for (const a of answers) if (a.input.value.trim()) { const v = a.input.value.trim(); ans[a.q.id] = `${isoLocal().slice(0, 10)}${/^[「『（(]/.test(v) ? '' : ' '}${v}`; }
+    try {
+      const r = applyTaskEdits(text, {
+        front: { priority: f.priority.value, status: f.status.value, stage: f.stage.value, assignee: f.assignee.value },
+        answers: ans, log: note.value,
+      }, { who: WHO() });
+      if (!r.changed) { msg.className = 'status'; msg.textContent = '変わったところがありません'; return; }
+      confirmAndSend(`書き換えの確認: ${t.id}`, [{ path: t.path, before: text, after: r.text }], commitMessage(ctx.login, '書き換え', [t.id]));
+    } catch (e) { msg.className = 'status error'; msg.textContent = e.message; }
+  });
+  dlg.replaceChildren(
+    el('h2', {}, `書き換え: ${t.title || t.id}`),
+    el('div', { class: 'dlg-body' },
+      el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), t.claimedBy ? ` ・ 担当 ${t.claimedBy}（エージェントが作業中のことがあります。状態の書き換えは控えめに）` : ''),
+      el('div', { class: 'fields' },
+        row('優先度', f.priority, '緊急（urgent）にできるのは利用者だけ（AGENTS.md 7.1）'),
+        row('状態', f.status, 'done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
+        row('段階', f.stage),
+        row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
+      answers.length ? el('h3', {}, '利用者への質問と回答') : null,
+      ...answers.map(({ q, input }) => el('div', { class: 'question' },
+        el('div', {}, el('strong', {}, q.id), ' ', q.question),
+        el('div', { class: 'sub' }, '回答: ', q.answer || '（まだ）'),
+        input)),
+      el('h3', {}, 'ログ'), note),
+    msg, el('div', { class: 'dlg-actions' }, cancel, next));
+  if (!dlg.open) dlg.showModal();
+}
+
+// 並べ替え: 動かしたタスクと、振り直しで order の変わるタスクを、1 コミットで
+function moveTask(columns, id, toPriority, toIndex) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  let plan;
+  try { plan = planReorder(columns, id, toPriority, toIndex); } catch (e) { setStatus(e.message, 'error'); return; }
+  if (!plan.length) return;
+  const byId = new Map(ctx.tasks.map((t) => [t.id, t]));
+  const now = isoLocal();
+  const items = plan.map((c) => {
+    const t = byId.get(c.id);
+    const before = ctx.texts.get(t.path);
+    const front = { ...(c.priority ? { priority: c.priority } : {}), ...(c.order != null ? { order: String(c.order) } : {}) };
+    const what = c.id === id
+      ? `並べ替え: ${c.priority ? `優先度 ${PRIORITY_JA[t.priority] || t.priority} → ${PRIORITY_JA[c.priority]}、` : ''}${PRIORITY_JA[toPriority]}の ${toIndex + 1} 番目へ（order ${c.order ?? t.order}）`
+      : `並べ替え: ${id} を動かしたため order を ${t.order ?? '（なし）'} → ${c.order} に振り直し`;
+    return { path: t.path, before, after: applyTaskEdits(before, { front, log: what }, { who: WHO(), now }).text };
+  });
+  confirmAndSend(`並べ替えの確認: ${id}`, items, commitMessage(ctx.login, '並べ替え', plan.map((c) => c.id)));
+}
+
+// 並べ替えの画面: 優先度ごとの列。ドラッグ＆ドロップ、またはカードのボタン・Alt + 矢印キー
+function renderBoard(open) {
+  const board = $('board');
+  if (!ctx.canWrite) {
+    board.replaceChildren(el('p', { class: 'note' }, 'トークンに書き込みの権限が無いので、並べ替えはできません（README の「使い方」）'));
+    return;
+  }
+  const columns = priorityColumns(open);
+  let dragId = null;
+  const indexAt = (list, y) => {
+    const cards = [...list.querySelectorAll('.task-card')].filter((c) => c.dataset.id !== dragId);
+    const i = cards.findIndex((c) => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    return i < 0 ? cards.length : i;
+  };
+  const cols = PRIORITIES.map((p, pi) => {
+    const list = el('div', { class: 'col-list', 'data-priority': p });
+    columns[p].forEach((t, i) => {
+      const btn = (label, title, fn, disabled) => {
+        const b = el('button', { type: 'button', class: 'mini', title, 'aria-label': `${t.id} を${title}` }, label);
+        b.disabled = !!disabled;
+        b.addEventListener('click', fn);
+        return b;
+      };
+      const up = () => moveTask(columns, t.id, p, i - 1);
+      const down = () => moveTask(columns, t.id, p, i + 1);
+      const left = () => moveTask(columns, t.id, PRIORITIES[pi - 1], columns[PRIORITIES[pi - 1]].length);
+      const right = () => moveTask(columns, t.id, PRIORITIES[pi + 1], 0);
+      const card = el('div', { class: `task-card st-${t.status}`, draggable: 'true', tabindex: '0', 'data-id': t.id, 'aria-label': `${t.title || t.id}（${PRIORITY_JA[p]}の ${i + 1} 番目）。Alt + 矢印キーで動かす` },
+        el('div', {}, el('span', { class: `badge st-${t.status}` }, STATUS_JA[t.status] || t.status), ' ', el('span', { class: 'sub' }, t.project)),
+        el('div', { class: 'card-title' }, t.title || t.id),
+        el('div', { class: 'card-foot' }, el('span', { class: 'sub' }, t.order != null ? `order ${t.order}` : 'order なし'),
+          el('span', { class: 'card-btns' },
+            btn('↑', '上へ', up, i === 0), btn('↓', '下へ', down, i === columns[p].length - 1),
+            btn('←', '優先度を上げる', left, pi === 0), btn('→', '優先度を下げる', right, pi === PRIORITIES.length - 1),
+            btn('✎', '書き換える', () => openEditor(t)))));
+      card.addEventListener('dragstart', (ev) => { dragId = t.id; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', t.id); card.classList.add('dragging'); });
+      card.addEventListener('dragend', () => { dragId = null; card.classList.remove('dragging'); board.querySelectorAll('.over').forEach((x) => x.classList.remove('over')); });
+      card.addEventListener('keydown', (ev) => {
+        if (!ev.altKey) return;
+        const fn = { ArrowUp: i > 0 && up, ArrowDown: i < columns[p].length - 1 && down, ArrowLeft: pi > 0 && left, ArrowRight: pi < PRIORITIES.length - 1 && right }[ev.key];
+        if (fn) { ev.preventDefault(); fn(); }
+      });
+      list.append(card);
+    });
+    list.addEventListener('dragover', (ev) => { if (!dragId) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; list.classList.add('over'); });
+    list.addEventListener('dragleave', (ev) => { if (!list.contains(ev.relatedTarget)) list.classList.remove('over'); });
+    list.addEventListener('drop', (ev) => { ev.preventDefault(); list.classList.remove('over'); if (dragId) moveTask(columns, dragId, p, indexAt(list, ev.clientY)); });
+    return el('div', { class: `col pr-${p}` }, el('h3', {}, `${PRIORITY_JA[p]}（${columns[p].length}）`), list);
+  });
+  board.replaceChildren(
+    el('p', { class: 'note' }, '列の中・列の間でカードを動かすと、優先度（priority）と並びの順（order）を書き換えます。送る前に差分を見せます。キーボードでは、カードを選んで Alt + 矢印キー。'),
+    el('div', { class: 'board' }, ...cols));
 }
 
 const STATUS_JA = { doing: '作業中', waiting: '判断待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
@@ -316,7 +544,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   if (open.length === 0) taskBody.replaceChildren(el('p', { class: 'note' }, '進行中・待ちのタスクはありません'));
   else {
     taskBody.replaceChildren(el('table', {},
-      el('thead', {}, el('tr', {}, ...['信号', '状態', '優先', '案件', 'タスク', '段階', '担当', 'PR / MR', '現在地'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['信号', '状態', '優先', '案件', 'タスク', '段階', '担当', 'PR / MR', '現在地', ...(ctx.canWrite ? ['操作'] : [])].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...open.map((t) => {
         const p = projects.get(t.project);
         const prs = findPullRequests(t.refsText, p ? p.repos : []);
@@ -330,10 +558,14 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
           el('td', {}, t.stage),
           el('td', {}, agentLink(who, roster, branch, files), el('div', { class: 'sub' }, t.heartbeatAt ? '印 ' + ageText(t.heartbeatAt) : '')),
           el('td', {}, prs.length ? el('ul', { class: 'prs' }, ...prs.map((x) => el('li', {}, link(x.url, x.label)))) : el('span', { class: 'sub' }, '—')),
-          el('td', {}, t.progress, el('div', { class: 'sub' }, t.next ? '次: ' + t.next : '')));
+          el('td', {}, t.progress, el('div', { class: 'sub' }, t.next ? '次: ' + t.next : '')),
+          ctx.canWrite ? el('td', {}, editButton(t)) : null);
       })),
     ));
   }
+
+  // 並べ替え
+  renderBoard(open);
 
   // 案件とリポジトリ
   const pj = [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -365,10 +597,17 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   $('main').hidden = false;
 }
 
+function editButton(t) {
+  const unanswered = t.questions.filter((q) => !q.answer).length;
+  const b = el('button', { type: 'button', class: 'mini' + (unanswered ? ' primary' : '') }, unanswered ? `回答する（${unanswered}）` : '書き換える');
+  b.addEventListener('click', () => openEditor(t));
+  return b;
+}
+
 function showError(e) {
   let msg = e.message || String(e);
   if (e.status === 401) msg = 'トークンが無効か、期限が切れています（401）。作り直して入れ直してください';
-  else if (e.status === 404 || e.status === 403) msg = `${CONFIG.owner}/${CONFIG.repo} を読めません（${e.status}）。トークンの対象リポジトリと Contents: Read の権限を確かめてください`;
+  else if (e.status === 404 || e.status === 403) msg = `${CONFIG.owner}/${CONFIG.repo} を読めません（${e.status}）。トークンの対象リポジトリと Contents の権限を確かめてください`;
   setStatus(msg, 'error');
   $('main').hidden = true;
 }
@@ -386,7 +625,7 @@ function init() {
     load(token).catch(showError);
   });
   $('reload').addEventListener('click', () => { const t = loadToken(); if (t) load(t).catch(showError); else setStatus('トークンを入れてください'); });
-  $('forget').addEventListener('click', () => { clearToken(); $('main').hidden = true; setStatus('トークンを消しました'); });
+  $('forget').addEventListener('click', () => { clearToken(); ctx = null; if ($('dialog').open) $('dialog').close(); $('main').hidden = true; setStatus('トークンを消しました'); });
   const t = loadToken();
   if (t) load(t).catch(showError);
   else setStatus('トークンを入れてください');

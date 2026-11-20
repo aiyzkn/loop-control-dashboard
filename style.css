@@ -122,3 +122,44 @@ ul.prs, ul.repos { margin: 0; padding-left: 16px; }
   .overall { flex: 1 1 100%; }
   .gauge { flex: 1 1 100px; }
 }
+
+/* ---- 書き込み: 並べ替えの列・確認の画面 ---- */
+button.primary { border-color: var(--link); background: var(--link); color: #fff; }
+button.mini { padding: 0 6px; font-size: 12px; line-height: 20px; }
+button:disabled { opacity: 0.4; cursor: default; }
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.col { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 4px 8px 8px; min-width: 0; }
+.col h3 { margin: 4px 0 6px; }
+.col.pr-urgent h3 { color: var(--err); }
+.col.pr-high h3 { color: var(--warn); }
+.col-list { min-height: 48px; display: flex; flex-direction: column; gap: 6px; border-radius: 6px; }
+.col-list.over { outline: 2px dashed var(--link); outline-offset: 2px; }
+.task-card { padding: 6px 8px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; background: var(--bg); cursor: grab; }
+.task-card:focus { outline: 2px solid var(--link); }
+.task-card.dragging { opacity: 0.4; }
+.task-card.st-doing { border-left-color: var(--st-doing); }
+.task-card.st-waiting { border-left-color: var(--st-waiting); }
+.task-card.st-blocked { border-left-color: var(--st-blocked); }
+.task-card.st-ready { border-left-color: var(--st-ready); }
+.task-card.st-draft { border-left-color: var(--st-draft); }
+.card-title { overflow-wrap: anywhere; }
+.card-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; align-items: center; }
+.card-btns { display: inline-flex; gap: 2px; }
+dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 32px); border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); padding: 16px; }
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog h2 { margin-top: 0; }
+.dlg-body { overflow: auto; max-height: calc(100vh - 200px); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field input, .field select, .question input, .dlg-body > input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); width: 100%; }
+.question { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.question input { margin-top: 4px; }
+.diff-file { margin: 8px 0; }
+.diff-path { font-family: ui-monospace, monospace; font-size: 12px; }
+pre.diff { margin: 4px 0; padding: 6px; overflow-x: auto; background: var(--card); border-radius: 6px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.diff .add { color: var(--ok); display: block; }
+pre.diff .del { color: var(--err); display: block; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--err) 50%, transparent); }
+pre.diff .gap { color: var(--muted); display: block; }
+@media (max-width: 800px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .board { grid-template-columns: 1fr; } }
