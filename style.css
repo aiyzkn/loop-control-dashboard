@@ -376,3 +376,5 @@ svg.limit-chart .now { stroke: var(--link); stroke-width: 2; }
 @media print {
   :root[data-theme="cockpit"] body::before { display: none; }
 }
+/* 操作の列（書き換える・写して起票・戻す・追記）。狭い画面では折り返す */
+div.ops { display: flex; flex-wrap: wrap; gap: 4px; }
