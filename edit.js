@@ -4,7 +4,9 @@
 import { parseQuestions, compareInPriority } from './parse.js';
 
 export const PRIORITIES = ['urgent', 'high', 'normal', 'low'];
-export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'blocked', 'done', 'dropped'];
+export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'review', 'blocked', 'done', 'dropped'];
+// 利用者の番の状態（waiting = 判断・回答待ち、review = マージ待ち）。回答がそろう・PR をマージすると、エージェントの番（doing）に戻す
+export const USER_TURN = ['waiting', 'review'];
 export const STAGES = ['propose', 'implement', 'merge'];
 
 // 1 行の値にする（改行・制御文字を空白に。前後の空白を除く）
@@ -196,10 +198,20 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
     front[k] = nv;
     notes.push(nv === null ? `${k} を消す` : `${k}: ${fmNow[k] ?? '（なし）'} → ${nv}`);
   }
+  let answered = 0;
   for (const [qid, ans] of Object.entries(edits.answers || {})) {
     if (!oneLine(ans)) continue;
     out = setAnswer(out, qid, ans);
     notes.push(`${qid} に回答`);
+    answered++;
+  }
+  if (!('status' in front) && USER_TURN.includes(fmNow.status || '')) {
+    const qs = parseQuestions(out);
+    const allAnswered = answered > 0 && qs.length > 0 && qs.every((q) => q.answer);
+    if (allAnswered || edits.handBack) {
+      front.status = 'doing';
+      notes.push(`${allAnswered ? '回答がそろったので' : 'マージしたので'} status: ${fmNow.status} → doing（エージェントの番）`);
+    }
   }
   if (!notes.length && !oneLine(edits.log)) return { text: String(text), changed: false, notes };
   out = setFrontMatter(out, { ...front, updated: now });
@@ -362,5 +374,5 @@ export function githubRepos(projects) {
 export function taskForPr(tasks, url, prsOf) {
   const u = String(url).toLowerCase();
   const hit = tasks.filter((t) => prsOf(t).some((x) => String(x).toLowerCase() === u));
-  return hit.find((t) => ['doing', 'waiting', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
+  return hit.find((t) => ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
 }
