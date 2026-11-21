@@ -1,7 +1,7 @@
 // 見栄えのための部品（カード・マトリックス・ツリーマップ）の、純粋な計算（ブラウザでも Node.js の試験でも使う）。
 // 描くのは app.js（SVG と DOM）。ここは数と配置だけを返す。
 
-export const OPEN_STATUSES = ['doing', 'waiting', 'blocked', 'ready', 'draft'];
+export const OPEN_STATUSES = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
 
 // 案件ごとのまとめ（カード・ツリーマップ・マトリックスの元）。
 // openTasks = 進行中・待ちのタスク（parseTask の形）、archivedPaths = projects/<案件>/archive/*.md の一覧、projectIds = 案件の名前
