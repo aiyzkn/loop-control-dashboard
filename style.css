@@ -283,3 +283,23 @@ a.btn-link { display: inline-block; padding: 6px 12px; border: 1px solid var(--l
 a.btn-link.mini { padding: 0 6px; font-size: 12px; line-height: 20px; }
 a.btn-link:hover { border-color: var(--link); }
 .warn-text { color: var(--warn); }
+
+/* ---- 上限の帯（5 時間・週）と夜の背景 ---- */
+.limits { margin-top: 12px; }
+svg.limit-chart { width: 100%; min-width: 640px; height: auto; display: block; }
+svg.limit-chart .grid { stroke: var(--line); stroke-width: 1; }
+svg.limit-chart .axis { fill: var(--muted); font-size: 11px; }
+svg.limit-chart .row-name { fill: var(--fg); font-size: 12px; font-weight: 600; }
+svg.limit-chart .night, .limits .swatch.night { fill: var(--fg); background: var(--fg); opacity: 0.07; }
+svg.limit-chart .band { opacity: 0.35; }
+svg.limit-chart .band.hit { opacity: 0.85; }
+svg.limit-chart .band.active { stroke: var(--fg); stroke-width: 1.5; }
+svg.limit-chart .k-five_hour, .limits .swatch.k-five_hour { fill: var(--st-waiting); background: var(--st-waiting); }
+svg.limit-chart .k-seven_day, .limits .swatch.k-seven_day { fill: var(--st-blocked); background: var(--st-blocked); }
+svg.limit-chart .now { stroke: var(--link); stroke-width: 2; }
+.limits .limit-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0; }
+.limits .key { display: inline-flex; align-items: center; gap: 4px; }
+.limits .swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.limits .swatch.miss { background: var(--st-waiting); opacity: 0.35; }
+.limits .swatch.night { opacity: 0.25; border: 1px solid var(--line); }
+.limits .swatch.now { width: 3px; height: 12px; background: var(--link); }

@@ -152,3 +152,41 @@ test('timeTicks は窓の長さで目盛りの細かさを変える', () => {
   // 位置は実際の時刻の割合（今日の 0 時は窓の端ではない）
   assert.ok(t14[13].f < 1 && t14[13].f > 0.9);
 });
+
+test('日の出・日の入り（東京）は数分の誤差で合う。夜の区間は窓で切る', async () => {
+  const { sunTimes, nightSpans, SUN_PLACE } = await import('../viz.js');
+  const hm = (ms) => { const d = new Date(ms + 9 * 3600e3); return d.getUTCHours() * 60 + d.getUTCMinutes(); };   // 日本時間の分
+  const near = (ms, h, m) => Math.abs(hm(ms) - (h * 60 + m)) <= 6;
+  const w = sunTimes(Date.parse('2026-12-22T12:00:00+09:00'), SUN_PLACE.lat, SUN_PLACE.lng);
+  assert.ok(near(w.rise, 6, 47) && near(w.set, 16, 32), `冬至 ${hm(w.rise)} ${hm(w.set)}`);
+  const s = sunTimes(Date.parse('2026-06-21T12:00:00+09:00'), SUN_PLACE.lat, SUN_PLACE.lng);
+  assert.ok(near(s.rise, 4, 25) && near(s.set, 19, 0), `夏至 ${hm(s.rise)} ${hm(s.set)}`);
+  const from = Date.parse('2026-11-20T00:00:00+09:00'), to = Date.parse('2026-11-22T00:00:00+09:00');
+  const n = nightSpans(from, to);
+  assert.equal(n.length, 3);
+  assert.equal(n[0].x0, 0);
+  assert.equal(n[2].x1, 1);
+  assert.ok(n.every((x) => x.x0 < x.x1 && x.x0 >= 0 && x.x1 <= 1));
+  assert.equal(sunTimes(Date.parse('2026-12-22T12:00:00Z'), 80, 0).rise, null);   // 極夜
+});
+
+test('上限の帯: アカウントでまとめ、窓に掛かるものだけ・同じ窓は 1 つ', async () => {
+  const { limitRows } = await import('../viz.js');
+  const from = Date.parse('2026-11-14T00:00:00+09:00'), to = Date.parse('2026-11-22T00:00:00+09:00');
+  const now = Date.parse('2026-11-20T18:00:00+09:00');
+  const w = (kind, s, r, hit = true) => ({ kind, startsAt: s, resetsAt: r, hit });
+  const pcs = [
+    { agentId: 'a-claude', pc: 'A', limits: [w('five_hour', '2026-11-20T16:00:00+09:00', '2026-11-20T21:00:00+09:00'), w('seven_day', '2026-11-12T08:00:00+09:00', '2026-11-19T08:00:00+09:00'), w('five_hour', '2026-11-01T00:00:00+09:00', '2026-11-01T05:00:00+09:00')] },
+    { agentId: 'b-claude', pc: 'B', limits: [w('five_hour', '2026-11-20T16:00:00+09:00', '2026-11-20T21:00:00+09:00', false), w('bogus', '2026-11-20T00:00:00+09:00', '2026-11-20T01:00:00+09:00')] },
+    { agentId: 'c-claude', pc: 'C' },
+  ];
+  const roster = [{ id: 'a-claude', account: 'main' }, { id: 'b-claude', account: '`main`'.replace(/`/g, '') }, { id: 'c-claude', account: '<アカウントの呼び名>' }];
+  const rows = limitRows(pcs, roster, from, to, now);
+  assert.deepEqual(rows.map((r) => [r.name, r.agents]), [['main', ['a-claude', 'b-claude']], ['PC C', ['c-claude']]]);
+  const main = rows[0].bands;
+  assert.equal(main.length, 2);
+  assert.deepEqual(main.map((b) => [b.kind, b.hit, b.active]), [['seven_day', true, false], ['five_hour', true, true]]);
+  assert.equal(main[0].x0, 0);   // 窓より前から始まる週は 0 で切る
+  assert.ok(main[1].x0 > 0.8 && main[1].x1 < 0.9);
+  assert.deepEqual(rows[1].bands, []);
+});

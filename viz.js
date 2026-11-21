@@ -233,3 +233,79 @@ export function timeTicks(from, to, days) {
   }
   return out;
 }
+
+// ---- 上限（5 時間・週）の帯と、夜の背景（20261121-dashboard-improve D4） ----
+
+// 日の出・日の入りの場所。利用者の指定で東京に固定（場所の入力・保存はしない）
+export const SUN_PLACE = { name: '東京', lat: 35.6895, lng: 139.6917 };
+
+// 日の出・日の入り（ms）。太陽の位置の簡易式（NOAA / 天文年鑑の近似。誤差は数分）。極地の白夜・極夜は null
+export function sunTimes(dateMs, lat, lng) {
+  const rad = Math.PI / 180, dayMs = 864e5, J1970 = 2440588, J2000 = 2451545, J0 = 0.0009;
+  const e = rad * 23.4397;
+  const lw = rad * -lng, phi = rad * lat;
+  const d = dateMs / dayMs - 0.5 + J1970 - J2000;
+  const n = Math.round(d - J0 - lw / (2 * Math.PI));
+  const ds = J0 + lw / (2 * Math.PI) + n;
+  const M = rad * (357.5291 + 0.98560028 * ds);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + rad * 102.9372 + Math.PI;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const transit = (a) => J2000 + a + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  const noon = transit(ds);
+  const cosw = (Math.sin(rad * -0.833) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec));
+  if (cosw < -1 || cosw > 1) return { rise: null, set: null };
+  const w = Math.acos(cosw);
+  const set = transit(J0 + (w + lw) / (2 * Math.PI) + n);
+  const rise = noon - (set - noon);
+  const toMs = (j) => (j + 0.5 - J1970) * dayMs;
+  return { rise: toMs(rise), set: toMs(set) };
+}
+
+// from〜to の夜（日の入り〜次の日の出）の区間。[{ x0, x1, from, to }]（x は窓の中の位置 0〜1）
+export function nightSpans(from, to, place = SUN_PLACE) {
+  const span = Math.max(to - from, 1);
+  const out = [];
+  // 正午を基準に日ごとに進める（タイムゾーンによらず、その日の日の入りと翌日の日の出を取る）
+  for (let t = from - 864e5; t <= to; t += 864e5) {
+    const a = sunTimes(t, place.lat, place.lng).set;
+    const b = sunTimes(t + 864e5, place.lat, place.lng).rise;
+    if (a == null || b == null || b <= from || a >= to) continue;
+    const s = Math.max(a, from), e = Math.min(b, to);
+    if (out.length && s <= out[out.length - 1].to) continue;
+    out.push({ from: s, to: e, x0: (s - from) / span, x1: (e - from) / span });
+  }
+  return out;
+}
+
+// 名簿の「AI のアカウント」が未記入（空・-・<…> のひな形）なら ''
+const accountName = (s) => { const v = String(s || '').trim(); return !v || v === '-' || /^<.*>$/.test(v) ? '' : v; };
+
+// 上限の帯の行。pcs = state/pcs/*.json（limits: [{ kind, startsAt, resetsAt, hit }]）。roster = parseRoster（account 付き）。
+// 行 = AI のアカウント（同じアカウントの PC はまとめる。未記入なら PC ごと）。窓は種類と解除時刻で 1 つにまとめる。
+// [{ name, agents, bands: [{ kind, start, reset, hit, active, x0, x1 }] }]（x は from〜to の中の位置。窓に掛からないものは除く）
+export function limitRows(pcs, roster, from, to, now = Date.now()) {
+  const span = Math.max(to - from, 1);
+  const groups = new Map();
+  for (const p of pcs || []) {
+    const r = (roster || []).find((x) => x.id === p.agentId);
+    const acc = accountName(r && r.account);
+    const name = acc || `PC ${p.pc || p.agentId || '?'}`;
+    if (!groups.has(name)) groups.set(name, { name, agents: [], seen: new Map() });
+    const g = groups.get(name);
+    if (p.agentId) g.agents.push(p.agentId);
+    for (const w of Array.isArray(p.limits) ? p.limits : []) {
+      const start = Date.parse(w.startsAt), reset = Date.parse(w.resetsAt);
+      const kind = w.kind === 'seven_day' ? 'seven_day' : w.kind === 'five_hour' ? 'five_hour' : '';
+      if (!kind || Number.isNaN(start) || Number.isNaN(reset) || reset <= from || start >= to) continue;
+      const key = `${kind}/${reset}`;
+      const prev = g.seen.get(key);
+      if (prev) { prev.hit = prev.hit || !!w.hit; continue; }
+      g.seen.set(key, { kind, start, reset, hit: !!w.hit, active: start <= now && now < reset,
+        x0: Math.max(0, (start - from) / span), x1: Math.min(1, (reset - from) / span) });
+    }
+  }
+  return [...groups.values()]
+    .map((g) => ({ name: g.name, agents: g.agents.sort(), bands: [...g.seen.values()].sort((a, b) => a.reset - b.reset || a.kind.localeCompare(b.kind)) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
