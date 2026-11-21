@@ -174,11 +174,30 @@ export function commitMessage(login, action, ids = []) {
   return oneLine(`[dashboard:${who}] ${action}${tail ? ' ' + tail : ''}`);
 }
 
-// 書き込みの前の確かめ。changes = [{ path }]、treeEntries = 最新の tree（[{ path, sha }]）、blobs = 読んだ時点の Map(path → sha)。
-// 読んだ時点から blob が変わった（ほかで書き換えられた・作られた・消された）ファイルの path を返す
+// 書き込みの前の確かめ。changes = [{ path, overwrite? }]、treeEntries = 最新の tree（[{ path, sha }]）、blobs = 読んだ時点の Map(path → sha)。
+// 読んだ時点から blob が変わった（ほかで書き換えられた・作られた・消された）ファイルの path を返す。
+// overwrite の付いたもの（中身をすべてこのページが決めるファイル。即時実行の依頼）は比べない
 export function staleChanges(changes, treeEntries, blobs) {
   const sha = new Map((treeEntries || []).map((e) => [e.path, e.sha]));
-  return changes.filter((c) => sha.get(c.path) !== blobs.get(c.path)).map((c) => c.path);
+  return changes.filter((c) => !c.overwrite && sha.get(c.path) !== blobs.get(c.path)).map((c) => c.path);
+}
+
+// ---- 即時実行の依頼（キットの kick-poll.ps1 が kick.pollMinutes 分ごと（既定 3 分）に見に行き、kick.ps1 -Trigger now で起こす） ----
+
+const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const TASK_ID = /^\d{8}-[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+// 依頼のファイルの場所: state/kick/<エージェントの ID>.json
+export function kickRequestPath(agentId) {
+  if (!AGENT_ID.test(String(agentId || ''))) throw new Error(`エージェントの ID が使えません: ${agentId}`);
+  return `state/kick/${agentId}.json`;
+}
+
+// 依頼の中身。task は任意（空なら /auto-loop next と同じ。あれば、そのタスクを先に再開・着手させる）
+export function kickRequest({ by, task = '', now = isoLocal() }) {
+  const t = String(task || '').trim();
+  if (t && !TASK_ID.test(t)) throw new Error(`タスクの ID が使えません: ${t}`);
+  return JSON.stringify({ requestedAt: now, by: oneLine(by), task: t }, null, 2) + '\n';
 }
 
 // 1 つのタスクの書き換えをまとめて行う。edits = { front?: {キー: 値}, answers?: {Q1: '…'}, log?: '出来事' }。
