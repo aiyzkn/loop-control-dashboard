@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseFrontMatter, parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember, section, bulletValue,
-  hostUrl, accountUrl, parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal, countByProject, countByDay, doneRatio } from '../parse.js';
+  hostUrl, accountUrl, repoUrl, parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal, countByProject, countByDay, doneRatio } from '../parse.js';
 
 const task = `---
 id: 20261119-demo
@@ -184,6 +184,21 @@ test('PR / MR を拾う', () => {
   // GitHub のリポジトリが 2 つあると #番号 は決められない
   const two = [{ host: 'github.com', repo: 'a/x', url: 'https://github.com/a/x' }, { host: 'github.com', repo: 'a/y', url: 'https://github.com/a/y' }];
   assert.deepEqual(findPullRequests('#5', two), []);
+});
+
+test('未確定のリポジトリ（-）にはリンクを張らない・色コードを PR と読まない（事例 https://github.com/-/pull/475569）', () => {
+  assert.equal(repoUrl('github.com', '-'), '');
+  assert.equal(repoUrl('github.com', ''), '');
+  assert.equal(repoUrl('github.com', 'aiyzkn'), '');
+  assert.equal(repoUrl('github.com', 'aiyzkn/demo'), 'https://github.com/aiyzkn/demo');
+  assert.equal(repoUrl('gitlab.com', 'g/sub/demo'), 'https://gitlab.com/g/sub/demo');
+  const undecided = '## リポジトリ\n\n| キー | ホスト | リポジトリ | アカウント | 本流リモート | 基準ブランチ | 備考 |\n|---|---|---|---|---|---|---|\n| `main` | `github.com` | - | - | - | - | 未確定 |\n';
+  const repos = parseProject('projects/hwrta/project.md', undecided).repos;
+  assert.equal(repos[0].url, '');
+  assert.deepEqual(findPullRequests('- 背景の色（#475569）を濃くする\n- 続き #12', repos), []);
+  // リポジトリが決まっていても、コードの囲みの中と 6 桁以上は拾わない
+  const one = [{ host: 'github.com', repo: 'a/x', url: 'https://github.com/a/x' }];
+  assert.deepEqual(findPullRequests('色 `#475569` と（#475569）と ```\n#7\n``` と #8', one), [{ url: 'https://github.com/a/x/pull/8', label: 'x#8' }]);
 });
 
 test('信号の判定', () => {

@@ -428,11 +428,11 @@ function renderBoard(open, { pending = false } = {}) {
   board.replaceChildren(
     el('div', { class: 'board-tools' },
       el('p', { class: 'note' }, '列の中・列の間でカードを動かすと、優先度（priority）と並びの順（order）を書き換えます。キーボードでは、カードを選んで Alt + 矢印キー。'),
-      el('span', {}, el('label', {}, quick, ' 確認を省いてすぐ送る（このブラウザに覚える）'), ' ', reload)),
+      el('span', {}, el('label', {}, quick, ' 確認を省いてすぐ送る（このブラウザに覚えさせる）'), ' ', reload)),
     el('div', { class: 'board' + (pending ? ' pending' : '') }, ...cols));
 }
 
-// このブラウザに覚える設定（開閉・確認を省くか）。保存できない環境では、その場だけ
+// このブラウザに覚えさせる設定（開閉・確認を省くか・表示の色）。保存できない環境では、その場だけ
 const prefs = {
   key: 'loop-control-dashboard.prefs',
   all() { try { return JSON.parse(localStorage.getItem(this.key) || '{}'); } catch { return {}; } },
@@ -1302,7 +1302,7 @@ function showError(e) {
   $('tokenBox').open = true;
 }
 
-// 折りたためる節の開閉を、このブラウザに覚える
+// 折りたためる節の開閉を、このブラウザに覚えさせる
 function restoreFolds() {
   const folds = prefs.get('folds') || {};
   for (const d of document.querySelectorAll('details.fold[data-fold]')) {

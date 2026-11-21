@@ -3,8 +3,13 @@
   --ok: #1a7f37; --warn: #9a6700; --err: #cf222e; --link: #0969da;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --card: #151b23; --ok: #3fb950; --warn: #d29922; --err: #f85149; --link: #4493f8; }
+  :root:not([data-theme="light"]) { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --card: #151b23; --ok: #3fb950; --warn: #d29922; --err: #f85149; --link: #4493f8; }
 }
+:root[data-theme="dark"] { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --card: #151b23; --ok: #3fb950; --warn: #d29922; --err: #f85149; --link: #4493f8; }
+/* 表示（自動 / ライト / ダーク）。theme.js が <html data-theme> を書く。無ければ OS の設定に合わせる */
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1200px; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, "Yu Gothic UI", "Hiragino Sans", sans-serif; }
 h1 { font-size: 20px; margin: 0 0 4px; }
@@ -44,12 +49,17 @@ tr.st-waiting td:first-child { color: var(--warn); }
   --created: #8c959f; --archived: #1a7f37; --done: #8250df;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --st-doing: #3fb950; --st-waiting: #d29922; --st-blocked: #f85149; --st-ready: #4493f8; --st-draft: #6e7681;
     --lamp-off: #30363d; --housing: #010409; --needle: #e6edf3;
     --created: #6e7681; --archived: #3fb950; --done: #a371f7;
   }
 }
+:root[data-theme="dark"] {
+    --st-doing: #3fb950; --st-waiting: #d29922; --st-blocked: #f85149; --st-ready: #4493f8; --st-draft: #6e7681;
+    --lamp-off: #30363d; --housing: #010409; --needle: #e6edf3;
+    --created: #6e7681; --archived: #3fb950; --done: #a371f7;
+  }
 .docs { margin: 8px 0 0; }
 .panel { display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; margin-top: 8px; }
 .overview { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; flex: 1 1 100%; }
@@ -176,6 +186,8 @@ ul.prs button.mini { margin-left: 4px; }
 .topbar h1 { margin: 0; }
 .topbar .status { margin: 4px 0 6px; font-size: 13px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; position: relative; }
+.theme-pick { color: var(--muted); font-size: 13px; }
+.theme-pick select { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .token-box > summary { list-style: none; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); cursor: pointer; }
 .token-box > summary::-webkit-details-marker { display: none; }
 .token-box > summary::after { content: " ▾"; }
@@ -225,8 +237,9 @@ svg.treemap { width: 100%; height: auto; display: block; }
   --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-other: #8c959f;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-other: #6e7681; }
+  :root:not([data-theme="light"]) { --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-other: #6e7681; }
 }
+:root[data-theme="dark"] { --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-other: #6e7681; }
 .cat-1 { fill: var(--cat-1); background: var(--cat-1); } .cat-2 { fill: var(--cat-2); background: var(--cat-2); } .cat-3 { fill: var(--cat-3); background: var(--cat-3); }
 .cat-4 { fill: var(--cat-4); background: var(--cat-4); } .cat-5 { fill: var(--cat-5); background: var(--cat-5); } .cat-6 { fill: var(--cat-6); background: var(--cat-6); }
 .cat-7 { fill: var(--cat-7); background: var(--cat-7); } .cat-other { fill: var(--cat-other); background: var(--cat-other); }
@@ -251,8 +264,9 @@ svg.ribbon-chart { width: 100%; min-width: 560px; height: auto; display: block; 
 /* ---- GitHub の芝（緑の 1 つの色相の段階。明暗それぞれ） ---- */
 :root { --cg-0: #ebedf0; --cg-1: #9be9a8; --cg-2: #40c463; --cg-3: #30a14e; --cg-4: #216e39; }
 @media (prefers-color-scheme: dark) {
-  :root { --cg-0: #161b22; --cg-1: #0e4429; --cg-2: #006d32; --cg-3: #26a641; --cg-4: #39d353; }
+  :root:not([data-theme="light"]) { --cg-0: #161b22; --cg-1: #0e4429; --cg-2: #006d32; --cg-3: #26a641; --cg-4: #39d353; }
 }
+:root[data-theme="dark"] { --cg-0: #161b22; --cg-1: #0e4429; --cg-2: #006d32; --cg-3: #26a641; --cg-4: #39d353; }
 .cg-0 { fill: var(--cg-0); background: var(--cg-0); } .cg-1 { fill: var(--cg-1); background: var(--cg-1); } .cg-2 { fill: var(--cg-2); background: var(--cg-2); }
 .cg-3 { fill: var(--cg-3); background: var(--cg-3); } .cg-4 { fill: var(--cg-4); background: var(--cg-4); }
 rect.cg { stroke: var(--line); stroke-width: 0.5; }
