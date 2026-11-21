@@ -9,7 +9,7 @@ import {
   countByProject, countByDay, doneRatio,
 } from './parse.js';
 import {
-  PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
+  PRIORITIES, STATUSES, STAGES, staleChanges, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
@@ -205,16 +205,15 @@ async function headOf(token, branch) {
 class Conflict extends Error {}
 
 // changes = [{ path, content }]。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
-// ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む
+// ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む。
+// 先頭が手元の ctx.head と同じでも、必ず blob を比べる: 自分の書き込みのあと applyLocal が ctx.head を進めるが、
+// 書いていないファイルの blob は読んだ時点のままなので、その間にエージェントが push した変更を見落とす（2026-11-21 に古い版で上書きした）
 async function commitChanges(changes, message) {
   const { token, branch } = ctx;
   let base = await headOf(token, branch);
-  if (base.sha !== ctx.head.sha) {
-    const now = (await gh(token, `${REPO()}/git/trees/${base.tree}?recursive=1`)).body.tree || [];
-    const sha = new Map(now.map((e) => [e.path, e.sha]));
-    const moved = changes.filter((c) => sha.get(c.path) !== ctx.blobs.get(c.path)).map((c) => c.path);
-    if (moved.length) throw new Conflict(`読んだ後に、ほかで書き換えられています: ${moved.join('、')}`);
-  }
+  const now = (await gh(token, `${REPO()}/git/trees/${base.tree}?recursive=1`)).body.tree || [];
+  const moved = staleChanges(changes, now, ctx.blobs);
+  if (moved.length) throw new Conflict(`読んだ後に、ほかで書き換えられています: ${moved.join('、')}`);
   const tree = (await gh(token, `${REPO()}/git/trees`, {
     method: 'POST',
     body: { base_tree: base.tree, tree: changes.map((c) => ({ path: c.path, mode: '100644', type: 'blob', content: c.content })) },
