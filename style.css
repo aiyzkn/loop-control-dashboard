@@ -303,3 +303,76 @@ svg.limit-chart .now { stroke: var(--link); stroke-width: 2; }
 .limits .swatch.miss { background: var(--st-waiting); opacity: 0.35; }
 .limits .swatch.night { opacity: 0.25; border: 1px solid var(--line); }
 .limits .swatch.now { width: 3px; height: 12px; background: var(--link); }
+
+/* ---- 表示「コックピット」（ロボット SF アニメの操縦席の計器風。20261121-dashboard-cockpit-theme） ----
+   暗い地に、青緑の計器の線・琥珀の警告・走査線。色の変数は、ダークで定義しているものをすべて上書きする（test/theme.test.mjs が確かめる）。
+   飾りは CSS だけ（外部の書体・画像は使わない。CSP の style-src 'self' の内）。動きは prefers-reduced-motion で止める */
+:root[data-theme="cockpit"] {
+  color-scheme: dark;
+  --bg: #050b14; --fg: #cdeefb; --muted: #7fa6bb; --line: #1d4a5e; --card: #0a1824;
+  --ok: #3dffa0; --warn: #ffb020; --err: #ff4d5e; --link: #36d6ff;
+  --st-doing: #3dffa0; --st-waiting: #ffb020; --st-blocked: #ff4d5e; --st-ready: #36d6ff; --st-draft: #5f7d8c;
+  --lamp-off: #10232f; --housing: #02060b; --needle: #ffb020;
+  --created: #5f7d8c; --archived: #3dffa0; --done: #b48cff;
+  --cat-1: #36d6ff; --cat-2: #ff7a3d; --cat-3: #3dffa0; --cat-4: #ffb020; --cat-5: #ff5fa8; --cat-6: #7cd92e; --cat-7: #9d8bff; --cat-other: #5f7d8c;
+  --cg-0: #0b1a24; --cg-1: #0b3d3a; --cg-2: #0f6b5c; --cg-3: #1fae86; --cg-4: #3dffa0;
+  --hud: #36d6ff; --hud-dim: rgba(54, 214, 255, 0.12); --hud-glow: rgba(54, 214, 255, 0.35); --alert: #ffb020;
+}
+:root[data-theme="cockpit"] body {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(54, 214, 255, 0.10), transparent 60%),
+    linear-gradient(var(--hud-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hud-dim) 1px, transparent 1px);
+  background-size: 100% 100%, 48px 48px, 48px 48px;
+  background-attachment: fixed;
+  letter-spacing: 0.02em;
+}
+/* 走査線（画面全体。操作の邪魔をしない） */
+:root[data-theme="cockpit"] body::before {
+  content: ""; position: fixed; inset: 0; z-index: 50; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px);
+}
+:root[data-theme="cockpit"] :is(h1, h2, h3, th, button, .token-box > summary, .card .num, .pcard-num, .gauge-value) {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "BIZ UDGothic", monospace;
+}
+:root[data-theme="cockpit"] h1 { color: var(--hud); text-shadow: 0 0 8px var(--hud-glow); letter-spacing: 0.08em; }
+:root[data-theme="cockpit"] h1::before { content: "◢ "; color: var(--alert); }
+:root[data-theme="cockpit"] h1::after { content: " ▮"; color: var(--alert); animation: cockpit-blink 1.2s steps(2, start) infinite; }
+:root[data-theme="cockpit"] h2 { color: var(--hud); letter-spacing: 0.06em; }
+:root[data-theme="cockpit"] h2::before { content: "▸ "; color: var(--alert); }
+:root[data-theme="cockpit"] th { color: var(--hud); background: rgba(54, 214, 255, 0.08); }
+:root[data-theme="cockpit"] .topbar {
+  background: rgba(5, 11, 20, 0.94); border-bottom: 1px solid var(--hud);
+  box-shadow: 0 1px 0 var(--hud-glow), 0 6px 18px rgba(0, 0, 0, 0.6);
+}
+/* 計器の枠: 角を斜めに落とし、内側を薄く光らせる */
+:root[data-theme="cockpit"] :is(.card, .pcard, .gauge, .chart, .overall, .col, .question) {
+  border-radius: 0; border-color: var(--line);
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  box-shadow: inset 0 0 0 1px rgba(54, 214, 255, 0.10), inset 0 0 18px rgba(54, 214, 255, 0.08);
+}
+:root[data-theme="cockpit"] :is(.token-panel, dialog) { border-radius: 0; border-color: var(--hud); box-shadow: 0 0 0 1px var(--hud-glow), 0 12px 32px rgba(0, 0, 0, 0.7); }
+:root[data-theme="cockpit"] :is(.card .num, .pcard-num, .gauge-value) { color: var(--hud); text-shadow: 0 0 6px var(--hud-glow); font-variant-numeric: tabular-nums; }
+:root[data-theme="cockpit"] .card.alert .num { color: var(--err); text-shadow: 0 0 6px rgba(255, 77, 94, 0.5); }
+:root[data-theme="cockpit"] :is(button, .token-box > summary, a.btn-link, select, input, textarea, .badge) { border-radius: 0; }
+:root[data-theme="cockpit"] :is(button, .token-box > summary) { background: transparent; border-color: var(--hud); color: var(--hud); }
+:root[data-theme="cockpit"] :is(button:hover:not(:disabled), .token-box > summary:hover, a.btn-link:hover) { background: var(--hud-dim); box-shadow: 0 0 10px var(--hud-glow); }
+:root[data-theme="cockpit"] button.primary { background: var(--alert); border-color: var(--alert); color: #1a0f00; }
+:root[data-theme="cockpit"] :is(button, a, select, input, summary):focus-visible { outline: 2px solid var(--alert); outline-offset: 2px; }
+:root[data-theme="cockpit"] .badge { color: #02101a; font-weight: 600; }
+:root[data-theme="cockpit"] .badge.pr-high-badge { color: var(--warn); }
+:root[data-theme="cockpit"] .gauge .needle { filter: drop-shadow(0 0 3px rgba(255, 176, 32, 0.8)); }
+:root[data-theme="cockpit"] .status.error { text-shadow: 0 0 6px rgba(255, 77, 94, 0.5); }
+:root[data-theme="cockpit"] .status.error::before { content: "⚠ ALERT  "; font-family: ui-monospace, Consolas, monospace; }
+:root[data-theme="cockpit"] dialog::backdrop { background: rgba(0, 8, 14, 0.7); }
+@keyframes cockpit-blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="cockpit"] h1::after { animation: none; }
+}
+@media (max-width: 600px) {
+  :root[data-theme="cockpit"] h1::after { content: none; }
+}
+@media print {
+  :root[data-theme="cockpit"] body::before { display: none; }
+}
