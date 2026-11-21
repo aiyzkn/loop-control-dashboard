@@ -357,3 +357,90 @@ export function taskForPr(tasks, url, prsOf) {
   const hit = tasks.filter((t) => prsOf(t).some((x) => String(x).toLowerCase() === u));
   return hit.find((t) => ['doing', 'waiting', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
 }
+
+// ---- 完了したタスク（archive/）の扱い: 戻す・追記・写して起票 ----
+
+// archive/ のパスと tasks/ のパスを行き来する
+export function tasksPathOf(archivePath) {
+  const m = /^projects\/([A-Za-z0-9][A-Za-z0-9._-]*)\/archive\/([A-Za-z0-9][A-Za-z0-9._-]*\.md)$/.exec(String(archivePath));
+  if (!m) throw new Error(`archive/ のタスクのパスではありません: ${archivePath}`);
+  return `projects/${m[1]}/tasks/${m[2]}`;
+}
+
+// 「依頼（原文）」の節の範囲 [見出しの行, 次の節の行)。原文には受付の見出し（## <案件>: <件名>）がそのまま入るので、
+// 節の終わりは、ひな形（templates/task.md）の次の節の見出しで決める。見つからなければ null
+const TASK_SECTIONS = ['目的と完了条件', '利用者への質問と回答', '決定事項', '承認が要る操作', '計画', '現在地', '委任', '成果物', '未確認・推測', '実地確認の記録', 'ログ'];
+function requestRange(lines) {
+  const start = lines.findIndex((l) => l.trim() === '## 依頼（原文）');
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) if (/^## /.test(lines[i]) && TASK_SECTIONS.includes(lines[i].slice(3).trim())) { end = i; break; }
+  return { start, end };
+}
+
+// 「## 依頼（原文）」の節の末尾（次の節の前）に、日付つきの追記を足す。節が無ければ、先頭の直後に節を作る
+export function appendAddendum(text, body, { who, now = isoLocal() } = {}) {
+  const b = safeBody(body);
+  if (!b) throw new Error('追記が空です');
+  const src = String(text);
+  const eol = eolOf(src);
+  const lines = src.split(/\r?\n/);
+  const block = [`### 追記（${now.slice(0, 10)}、${oneLine(who)}）`, '', ...b.split('\n')];
+  const r = requestRange(lines);
+  if (!r) {
+    if (lines[0] !== '---') throw new Error('先頭（---）がありません');
+    const end = lines.indexOf('---', 1);
+    if (end < 0) throw new Error('先頭の閉じ（---）がありません');
+    return [...lines.slice(0, end + 1), '', '## 依頼（原文）', '', ...block, '', ...lines.slice(end + 1)].join(eol);
+  }
+  let last = r.start;
+  for (let i = r.start + 1; i < r.end; i++) if (lines[i].trim() !== '') last = i;
+  const rest = lines.slice(last + 1);
+  return [...lines.slice(0, last + 1), '', ...block, ...(rest.length && rest[0] !== '' ? [''] : []), ...rest].join(eol);
+}
+
+// 完了したタスクを戻す: status を ready（または指定）にし、担当を空に。assignee を指定すれば書き換える。
+// 追記があれば「依頼（原文）」に足す。ログに 1 行。返すのは新しい本文（tasks/ に置く）
+export function reopenTask(text, { status = 'ready', assignee, addendum, log, who, now = isoLocal() } = {}) {
+  if (!['ready', 'doing', 'waiting', 'blocked', 'draft'].includes(status)) throw new Error(`戻す先の状態が使えません: ${status}`);
+  let out = String(text);
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(out)?.[1] || '';
+  const before = /^status:\s*(.*)$/m.exec(fm)?.[1]?.trim() || '（なし）';
+  if (oneLine(addendum)) out = appendAddendum(out, addendum, { who, now });
+  const front = { status, claimed_by: '', claimed_at: '', heartbeat_at: '', updated: now };
+  const a = oneLine(assignee);
+  if (a) front.assignee = a;
+  out = setFrontMatter(out, front);
+  const parts = [`戻す（archive/ → tasks/、status: ${before} → ${status}${a ? `、assignee: ${a}` : ''}${oneLine(addendum) ? '、依頼に追記' : ''}）`];
+  if (oneLine(log)) parts.push(oneLine(log));
+  return appendLog(out, `${now} [${who}] ${parts.join('。')}`);
+}
+
+// 完了したタスク（archive/ のまま）に追記する。updated を書き、ログに 1 行
+export function addendumOnly(text, addendum, { log, who, now = isoLocal() } = {}) {
+  let out = appendAddendum(text, addendum, { who, now });
+  out = setFrontMatter(out, { updated: now });
+  return appendLog(out, `${now} [${who}] 依頼に追記${oneLine(log) ? '。' + oneLine(log) : ''}`);
+}
+
+// 写して起票: 元のタスクの依頼（原文）に「元: <ID>」を添えた、新しいタスクの入力の初期値
+export function copyRequest(text, { id, path } = {}) {
+  const src = String(text).replace(/\r\n/g, '\n');
+  const lines = src.split('\n');
+  const r = requestRange(lines);
+  let body = '';
+  if (r) {
+    // 原文にある見出し（## …）は、新しいタスクでは節を崩さないよう safeBody が \ を付ける
+    body = lines.slice(r.start + 1, r.end).join('\n').replace(/<!--[\s\S]*?-->/g, '').replace(/^\s+|\s+$/g, '');
+  }
+  const fm = Object.fromEntries((/^---\n([\s\S]*?)\n---/.exec(src)?.[1] || '').split('\n')
+    .map((l) => /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(l)).filter(Boolean).map((m) => [m[1], m[2].trim()]));
+  const origin = `元: ${id || fm.id || ''}${path ? `（${path}）` : ''}`;
+  return {
+    project: fm.project || '',
+    title: fm.title || '',
+    stage: STAGES.includes(fm.stage) ? fm.stage : 'propose',
+    priority: PRIORITIES.includes(fm.priority) && fm.priority !== 'urgent' ? fm.priority : 'normal',
+    body: [body, origin].filter(Boolean).join('\n\n'),
+  };
+}

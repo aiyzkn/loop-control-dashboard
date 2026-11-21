@@ -12,6 +12,7 @@ import {
   PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
+  tasksPathOf, reopenTask, addendumOnly, copyRequest,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
   calendarDays, sumDays, gridCells, timeTicks, limitRows, nightSpans, SUN_PLACE } from './viz.js';
@@ -134,7 +135,9 @@ async function load(token) {
   const inbox = parseInbox(inboxText);
   const roster = parseRoster(rosterText);
   // 書き込みに使う、読んだ時点の状態
-  archivedCache = null;   // ガントチャートの完了は、読み込みのたびに読み直す（ボタンで）
+  archivedCache = null;   // ガントチャート・完了の節の完了は、読み込みのたびに読み直す（ボタン・節を開いたとき）
+  archivedTexts = new Map();
+  doneShown = DONE_PAGE;
   contribCache = null;    // GitHub の芝も、読み込みのたびに（ビジュアルの節を開いたときに）読み直す
   openPrsCache = null;    // 未マージの PR も、読み込みのたびに（節を開いたときに）読み直す
   ctx = {
@@ -170,11 +173,27 @@ async function applyLocal(changes, commit) {
   let now = null;
   try { now = new Map(((await gh(ctx.token, `${REPO()}/git/trees/${commit.tree}?recursive=1`)).body.tree || []).map((e) => [e.path, e.sha])); } catch { }
   for (const c of changes) {
+    if (c.content === null) {
+      // 消したファイル（archive/ から tasks/ へ戻したときの、元の archive/ のファイル）
+      ctx.blobs.delete(c.path);
+      view.files.archived = view.files.archived.filter((p) => p !== c.path);
+      view.paths = view.paths.filter((p) => p !== c.path);
+      ctx.taskPaths = ctx.taskPaths.filter((p) => p !== c.path);
+      if (archivedCache) archivedCache.delete(c.path);
+      archivedTexts.delete(c.path);
+      continue;
+    }
     // 読めなければ消しておく（次にこのファイルを書くとき、ほかで変わっていなくても競合として止まる。「読み直す」で直る）
     if (now && now.has(c.path)) ctx.blobs.set(c.path, now.get(c.path)); else ctx.blobs.delete(c.path);
     if (c.path === ctx.inboxPath) {
       ctx.inboxText = c.content;
       view.inbox = parseInbox(c.content);
+      continue;
+    }
+    if (/^projects\/[^/]+\/archive\/[^/]+\.md$/.test(c.path)) {
+      // 完了したタスクへの追記（archive/ のまま）
+      archivedTexts.set(c.path, c.content);
+      (archivedCache ||= new Map()).set(c.path, parseTask(c.path, c.content));
       continue;
     }
     if (!/^projects\/[^/]+\/tasks\/[^/]+\.md$/.test(c.path)) continue;
@@ -187,6 +206,7 @@ async function applyLocal(changes, commit) {
     ctx.tasks = sortTasks([...ctx.tasks.filter((x) => x.path !== c.path), parseTask(c.path, c.content)]);
   }
   view.tasks = ctx.tasks;
+  view.archivedCount = view.files.archived.length;
   render(view);
 }
 
@@ -204,7 +224,7 @@ async function headOf(token, branch) {
 
 class Conflict extends Error {}
 
-// changes = [{ path, content }]。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
+// changes = [{ path, content }]（content が null なら、そのファイルを消す）。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
 // ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む
 async function commitChanges(changes, message) {
   const { token, branch } = ctx;
@@ -217,7 +237,10 @@ async function commitChanges(changes, message) {
   }
   const tree = (await gh(token, `${REPO()}/git/trees`, {
     method: 'POST',
-    body: { base_tree: base.tree, tree: changes.map((c) => ({ path: c.path, mode: '100644', type: 'blob', content: c.content })) },
+    // content が null のものは消す（archive/ → tasks/ の移動など）
+    body: { base_tree: base.tree, tree: changes.map((c) => (c.content === null
+      ? { path: c.path, mode: '100644', type: 'blob', sha: null }
+      : { path: c.path, mode: '100644', type: 'blob', content: c.content })) },
   })).body;
   const commit = (await gh(token, `${REPO()}/git/commits`, { method: 'POST', body: { message, tree: tree.sha, parents: [base.sha] } })).body;
   try {
@@ -232,7 +255,7 @@ async function commitChanges(changes, message) {
 
 // 送る（確認の画面から、または並べ替えで確認を省いたとき）。成功したら手元に反映して描き直す（全体は読み直さない）
 async function sendChanges(items, message) {
-  const changes = items.map((it) => ({ path: it.path, content: it.after }));
+  const changes = items.map((it) => ({ path: it.path, content: it.remove ? null : it.after }));
   const commit = await commitChanges(changes, message);
   await applyLocal(changes, commit);
   setStatus(`書き込みました（${commit.sha.slice(0, 7)}・${new Date().toLocaleTimeString()}）。ほかの変更は「読み直す」で取り込みます`, 'ok');
@@ -247,7 +270,7 @@ function writeError(e) {
 }
 
 // 確認の画面: 差分を見せ、「送る」でコミットする。items = [{ path, before, after }]
-// back があれば「戻る」で前の画面へ、onSent は送れた後に呼ぶ
+// remove が true の item は、そのファイルを消す（差分は全行の削除）。back があれば「戻る」で前の画面へ、onSent は送れた後に呼ぶ
 function confirmAndSend(title, items, message, { back, onSent } = {}) {
   const dlg = $('dialog');
   const body = el('div', { class: 'dlg-body' },
@@ -699,7 +722,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
           el('td', {}, agentLink(who, roster, branch, files), el('div', { class: 'sub' }, t.heartbeatAt ? '印 ' + ageText(t.heartbeatAt) : '')),
           el('td', {}, prs.length ? el('ul', { class: 'prs' }, ...prs.map((x) => el('li', {}, link(x.url, x.label), parsePrUrl(x.url) ? mergeButton(t, x) : null))) : el('span', { class: 'sub' }, '—')),
           el('td', {}, t.progress, el('div', { class: 'sub' }, t.next ? '次: ' + t.next : '')),
-          ctx.canWrite ? el('td', {}, editButton(t)) : null);
+          ctx.canWrite ? el('td', {}, el('div', { class: 'ops' }, editButton(t), copyButton(t, () => ctx.texts.get(t.path)))) : null);
       })),
     ));
   }
@@ -709,6 +732,9 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
   // 未マージの PR（節を開いたときだけ読む）
   renderOpenPrs({ tasks, projects });
+
+  // 完了（節を開いたときだけ読む）
+  renderDone({ files, projects, branch });
 
   // 案件とリポジトリ
   const pj = [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -738,6 +764,154 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     files.inbox ? el('p', {}, link(blobUrl(branch, files.inbox), 'inbox.md を GitHub で開く')) : null,
   );
   $('main').hidden = false;
+}
+
+// ---- 完了（archive/）の節: 戻す・追記・写して起票（節を開いたときだけ、新しいものから読む） ----
+
+const DONE_PAGE = 20;            // 1 回に読む完了のタスクの数（API を 1 件 1 回）
+let doneShown = DONE_PAGE;       // 読む・出す数（「もっと読む」で増やす。読み込みのたびに戻す）
+
+const byIdDesc = (a, b) => b.split('/').pop().localeCompare(a.split('/').pop());
+
+function renderDone({ files, projects, branch }) {
+  const box = $('done');
+  const fold = box.closest('details');
+  const total = files.archived.length;
+  $('doneCount').textContent = `（${total} 件）`;
+  const draw = () => {
+    if (!total) { box.replaceChildren(el('p', { class: 'note' }, '完了したタスクはありません')); return; }
+    const paths = [...files.archived].sort(byIdDesc).slice(0, doneShown);
+    const unread = paths.filter((p) => !archivedTexts.has(p));
+    if (unread.length) {
+      box.replaceChildren(el('p', { class: 'note' }, `読んでいます…（${unread.length} 件。API を ${unread.length} 回）`));
+      readArchived(unread).then(draw, (e) => box.replaceChildren(el('p', { class: 'status error' }, `読めませんでした（${e.status || e.message}）。「読み直す」からやり直してください`)));
+      return;
+    }
+    const rows = paths.map((p) => archivedCache.get(p)).filter(Boolean);
+    const table = el('table', {},
+      el('thead', {}, el('tr', {}, ...['状態', '案件', 'タスク', '段階', '更新', ...(ctx.canWrite ? ['操作'] : [])].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((t) => {
+        const pj = projects.get(t.project);
+        return el('tr', {},
+          el('td', {}, el('span', { class: `badge st-${t.status}` }, t.status === 'dropped' ? '取りやめ' : t.status === 'done' ? '完了' : STATUS_JA[t.status] || t.status)),
+          el('td', {}, link(pj ? blobUrl(branch, pj.path) : '', t.project)),
+          el('td', {}, link(blobUrl(branch, t.path), t.title || t.id), el('div', { class: 'sub' }, t.id)),
+          el('td', {}, t.stage),
+          el('td', {}, t.updated ? ageText(t.updated) : '—', el('div', { class: 'sub' }, t.updated || '')),
+          ctx.canWrite ? el('td', {}, el('div', { class: 'ops' }, reopenButton(t), addendumButton(t), copyButton(t, () => archivedTexts.get(t.path)))) : null);
+      })));
+    let more = null;
+    if (total > doneShown) {
+      const n = Math.min(DONE_PAGE, total - doneShown);
+      more = el('button', { type: 'button', class: 'mini' }, `もっと読む（次の ${n} 件。API を ${n} 回）`);
+      more.addEventListener('click', () => { doneShown += DONE_PAGE; draw(); });
+    }
+    box.replaceChildren(
+      el('p', { class: 'sub' }, `新しい順（タスク ID の日付）に ${rows.length} / ${total} 件。「戻す」は archive/ から tasks/ に移して担当を空にします。「写して起票」は依頼（原文）を写した新しいタスクを作ります（完了か否かによらない）`),
+      el('div', { class: 'scroll' }, table), more ? el('p', {}, more) : null);
+  };
+  if (fold.open) draw();
+  else box.replaceChildren(el('p', { class: 'note' }, '開くと、新しいものから読みます'));
+  fold.ontoggle = () => { if (fold.open && ctx) draw(); };
+}
+
+function reopenButton(t) {
+  const b = el('button', { type: 'button', class: 'mini primary', title: 'archive/ から tasks/ に戻し、担当を空にする' }, '戻す');
+  b.addEventListener('click', () => openReopen(t));
+  return b;
+}
+
+function addendumButton(t) {
+  const b = el('button', { type: 'button', class: 'mini', title: '依頼（原文）の下に、日付つきで追記する（archive/ のまま）' }, '追記');
+  b.addEventListener('click', () => openAddendum(t));
+  return b;
+}
+
+// 写して起票（完了か否かによらない）。getText は元のタスクの本文を返す
+function copyButton(t, getText) {
+  const b = el('button', { type: 'button', class: 'mini', title: '依頼（原文）を写して、新しいタスクを作る' }, '写して起票');
+  b.addEventListener('click', () => {
+    if (!ctx || !ctx.canWrite || busy || !newRequestForm) return;
+    const text = getText();
+    if (text == null) { setStatus('元のタスクの本文が読めていません。「読み直す」からやり直してください', 'error'); return; }
+    newRequestForm.prefill(copyRequest(text, { id: t.id, path: t.path }));
+    openNewRequest();
+  });
+  return b;
+}
+
+// 戻す: archive/<ID>.md を消し、tasks/<ID>.md を作る（1 コミット）
+function openReopen(t) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  const text = archivedTexts.get(t.path);
+  if (text == null) return;
+  const to = tasksPathOf(t.path);
+  const dlg = $('dialog');
+  const status = el('select', { name: 'status' }, ...['ready', 'draft'].map((s) => el('option', { value: s }, `${STATUS_JA[s] || s}（${s}）`)));
+  const prev = lastClaimer(text);
+  const assignee = el('input', { name: 'assignee', value: t.assignee || 'any', spellcheck: 'false', list: 'agentIdsReopen' });
+  const agents = el('datalist', { id: 'agentIdsReopen' }, ...['any', 'claude', 'copilot', ...(view.roster || []).map((r) => r.id)].map((v) => el('option', { value: v })));
+  const addendum = el('textarea', { name: 'addendum', rows: '5', placeholder: '（任意）やり直す理由・追加の依頼。「依頼（原文）」の下に日付つきで足す', spellcheck: 'false' });
+  const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ', spellcheck: 'false' });
+  const row = (label, input, sub) => el('label', { class: 'field' }, el('span', {}, label), input, sub ? el('span', { class: 'sub' }, sub) : null);
+  const msg = el('p', { class: 'status', role: 'status' });
+  const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
+  const cancel = el('button', { type: 'button' }, 'やめる');
+  cancel.addEventListener('click', () => dlg.close());
+  next.addEventListener('click', () => {
+    try {
+      if (ctx.blobs.has(to)) throw new Error(`${to} がすでにあります。「読み直す」で確かめてください`);
+      const after = reopenTask(text, { status: status.value, assignee: assignee.value, addendum: addendum.value, log: note.value, who: WHO() });
+      confirmAndSend(`戻すの確認: ${t.id}`, [
+        { path: t.path, before: text, after: '', remove: true },
+        { path: to, before: '', after },
+      ], commitMessage(ctx.login, '戻す', [t.id]), { back: () => openReopen(t) });
+    } catch (e) { msg.className = 'status error'; msg.textContent = e.message; }
+  });
+  dlg.replaceChildren(
+    el('h2', {}, `戻す: ${t.title || t.id}`),
+    el('div', { class: 'dlg-body' },
+      el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), ` → ${to}`),
+      agents,
+      el('div', { class: 'fields' },
+        row('戻す先の状態', status, '着手待ち（ready）にすると、自動起動・next の候補に入る。下書き（draft）は候補に入らない'),
+        row('割り当て（assignee）', assignee, prev ? `前に担当したのは ${prev}。同じエージェントに戻すなら、その ID を書く` : 'any・エージェントの ID・道具の名前')),
+      el('label', { class: 'field' }, el('span', {}, '依頼への追記'), addendum),
+      el('h3', {}, 'ログ'), note),
+    msg, el('div', { class: 'dlg-actions' }, cancel, next));
+  if (!dlg.open) dlg.showModal();
+}
+
+// 追記（archive/ のまま）
+function openAddendum(t) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  const text = archivedTexts.get(t.path);
+  if (text == null) return;
+  const dlg = $('dialog');
+  const addendum = el('textarea', { name: 'addendum', rows: '6', placeholder: '「依頼（原文）」の下に日付つきで足す', spellcheck: 'false' });
+  const msg = el('p', { class: 'status', role: 'status' });
+  const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
+  const cancel = el('button', { type: 'button' }, 'やめる');
+  cancel.addEventListener('click', () => dlg.close());
+  next.addEventListener('click', () => {
+    try {
+      const after = addendumOnly(text, addendum.value, { who: WHO() });
+      confirmAndSend(`追記の確認: ${t.id}`, [{ path: t.path, before: text, after }], commitMessage(ctx.login, '追記', [t.id]), { back: () => openAddendum(t) });
+    } catch (e) { msg.className = 'status error'; msg.textContent = e.message; }
+  });
+  dlg.replaceChildren(
+    el('h2', {}, `追記: ${t.title || t.id}`),
+    el('div', { class: 'dlg-body' },
+      el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), '（完了のまま。やり直してほしいときは「戻す」で一緒に書けます）'),
+      el('label', { class: 'field' }, el('span', {}, '追記'), addendum)),
+    msg, el('div', { class: 'dlg-actions' }, cancel, next));
+  if (!dlg.open) dlg.showModal();
+}
+
+// ログから、最後に担当したエージェント（claim の行）を拾う。ダッシュボードの書き込みは除く
+function lastClaimer(text) {
+  const ids = [...String(text).matchAll(/^- \S+ \[([^\]]+)\] claim/gm)].map((m) => m[1]).filter((x) => !x.startsWith('dashboard:'));
+  return ids.length ? ids[ids.length - 1] : '';
 }
 
 // ---- 依頼の登録（受付への追記、またはタスクファイルの作成。どちらも 1 コミット） ----
@@ -795,6 +969,13 @@ function buildNewRequestForm(roster) {
       msg, el('div', { class: 'dlg-actions' }, cancel, next)),
     focus: () => (f.project.value ? f.title : f.project).focus(),
     reset: () => { f.title.value = ''; f.slug.value = ''; f.body.value = ''; msg.textContent = ''; },
+    // 写して起票: 入力欄を元のタスクの値で埋める（書く先はタスクファイル。短い名前は空にして選ばせる）
+    prefill: (v) => {
+      f.dest.value = 'task'; sync();
+      if (ctx.projectIds.includes(v.project)) f.project.value = v.project;
+      f.title.value = v.title; f.slug.value = ''; f.stage.value = v.stage; f.priority.value = v.priority;
+      f.assignee.value = 'any'; f.body.value = v.body; msg.textContent = '';
+    },
   };
   next.addEventListener('click', () => submitNewRequest(f, msg, form).catch((e) => { msg.className = 'status error'; msg.textContent = e.message || String(e); }));
   return form;
@@ -846,6 +1027,15 @@ const GANTT_DEFAULT = 14;
 const GANTT_LIMIT = 20;           // 最初に出す行の数（新しい順）。「すべて表示」で残りを開く（ブラウザに覚える）
 const GANTT_ARCHIVE_MAX = 40;    // 完了を読むのは、ID の日付が窓の始まりより期間ぶん前までのものを、新しい順にこの数まで
 let archivedCache = null;        // 読んだ完了のタスク（パス → タスク。読み込みのたびに消す）
+let archivedTexts = new Map();   // 読んだ完了のタスクの本文（パス → 本文。戻す・追記に使う）
+
+// 完了のタスク（archive/）を、読んだ時点のコミットで読む（まだ読んでいないものだけ）
+async function readArchived(paths) {
+  const missing = paths.filter((p) => !archivedTexts.has(p));
+  const texts = await mapLimit(missing, 6, (p) => gh(ctx.token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${ctx.head.sha}`, { raw: true }).then((r) => r.body));
+  archivedCache ||= new Map();
+  missing.forEach((p, i) => { archivedTexts.set(p, texts[i]); archivedCache.set(p, parseTask(p, texts[i])); });
+}
 
 const ganttDays = () => { const d = Number(prefs.get('ganttDays')); return GANTT_PERIODS.includes(d) ? d : GANTT_DEFAULT; };
 
@@ -892,9 +1082,7 @@ function ganttBlock({ open, files, branch, now }) {
       more.addEventListener('click', async () => {
         more.disabled = true; more.textContent = '読んでいます…';
         try {
-          const texts = await mapLimit(missing, 6, (p) => gh(ctx.token, `${REPO()}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${ctx.head.sha}`, { raw: true }).then((r) => r.body));
-          archivedCache ||= new Map();
-          missing.forEach((p, i) => archivedCache.set(p, parseTask(p, texts[i])));
+          await readArchived(missing);
           draw();
         } catch (e) { more.disabled = false; more.textContent = `読めませんでした（${e.status || e.message}）。もう一度`; }
       });
