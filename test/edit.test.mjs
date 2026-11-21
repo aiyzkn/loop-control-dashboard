@@ -3,7 +3,28 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseTask, parseQuestions, sortTasks, parseOrder } from '../parse.js';
 import { setFrontMatter, appendLog, setAnswer, planReorder, priorityColumns, isoLocal, lineDiff, commitMessage, oneLine, applyTaskEdits,
-  parsePrUrl, summarizeChecks, mergeVerdict } from '../edit.js';
+  parsePrUrl, summarizeChecks, mergeVerdict, staleChanges, kickRequestPath, kickRequest } from '../edit.js';
+
+test('即時実行の依頼: 場所と中身。ID の形を確かめる', () => {
+  assert.equal(kickRequestPath('a-msi-claude'), 'state/kick/a-msi-claude.json');
+  assert.throws(() => kickRequestPath('../x'));
+  assert.throws(() => kickRequestPath(''));
+  const j = JSON.parse(kickRequest({ by: 'dashboard:me', task: '20261121-demo', now: '2026-11-21T23:50:00+09:00' }));
+  assert.deepEqual(j, { requestedAt: '2026-11-21T23:50:00+09:00', by: 'dashboard:me', task: '20261121-demo' });
+  assert.equal(JSON.parse(kickRequest({ by: 'dashboard:me', now: 'T' })).task, '');
+  assert.throws(() => kickRequest({ by: 'x', task: 'x; rm -rf' }));
+  assert.deepEqual(staleChanges([{ path: 'state/kick/a.json', overwrite: true }], [{ path: 'state/kick/a.json', sha: 'new' }], new Map()), [], '依頼は上書きしてよい');
+});
+
+test('書き込みの前の確かめ: 読んだ後に変わったファイルを見つける（先頭が同じでも）', () => {
+  const blobs = new Map([['a.md', 's1'], ['b.md', 's2']]);
+  const tree = [{ path: 'a.md', sha: 's1' }, { path: 'b.md', sha: 's9' }, { path: 'c.md', sha: 's3' }];
+  assert.deepEqual(staleChanges([{ path: 'a.md' }], tree, blobs), []);
+  assert.deepEqual(staleChanges([{ path: 'a.md' }, { path: 'b.md' }], tree, blobs), ['b.md'], 'エージェントが push した後の古い版');
+  assert.deepEqual(staleChanges([{ path: 'new.md' }], tree, blobs), [], '新しいファイル');
+  assert.deepEqual(staleChanges([{ path: 'c.md' }], tree, blobs), ['c.md'], '読んだ後にほかで作られた');
+  assert.deepEqual(staleChanges([{ path: 'a.md' }], [], blobs), ['a.md'], '読んだ後に消された');
+});
 
 const task = `---
 id: 20261120-demo
