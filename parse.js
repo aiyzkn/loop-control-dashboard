@@ -241,7 +241,7 @@ export function parseRoster(text) {
     if (!/^\s*\|/.test(l) || /^\s*\|\s*-/.test(l)) return;
     const cells = l.trim().replace(/^\||\|$/g, '').split('|').map(unquote);
     if (cells[0] === 'ID' || !cells[0]) return;
-    out.push({ id: cells[0], pc: cells[1] || '', tool: cells[2] || '', note: cells[5] || '', line: i + 1 });
+    out.push({ id: cells[0], pc: cells[1] || '', tool: cells[2] || '', account: cells[3] || '', note: cells[5] || '', line: i + 1 });
   });
   return out;
 }

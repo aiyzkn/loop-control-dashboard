@@ -14,7 +14,7 @@ import {
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
-  calendarDays, sumDays, gridCells, timeTicks } from './viz.js';
+  calendarDays, sumDays, gridCells, timeTicks, limitRows, nightSpans, SUN_PLACE } from './viz.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -534,6 +534,57 @@ function dayChart(days) {
       svg('line', { x1: 0, y1: H, x2: W, y2: H, class: 'baseline' }), ...bars, ...labels.filter(Boolean)));
 }
 
+// 上限（5 時間・週）の帯と、夜（日の入り〜日の出。東京）の背景。PC の状況の limits から（20261121-dashboard-improve D4）。
+// 行 = roster.md の「AI のアカウント」（未記入なら PC ごと）。窓の始まりは記録に無いので、解除時刻から窓の長さを引いた推定
+function limitBlock({ pcs, roster, now }) {
+  const t0 = new Date(now);
+  const from = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() - 6).getTime();
+  const to = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() + 2).getTime();
+  const head = el('h3', {}, '上限の帯（直近 7 日と明日）');
+  if (!pcs.some((p) => Array.isArray(p.limits))) {
+    return el('div', { class: 'limits' }, head, el('p', { class: 'note' }, '上限の記録はまだありません（kick.ps1 が PC の状況に limits を書くようになると出ます）'));
+  }
+  const rows = limitRows(pcs, roster, from, to, now);
+  const W = 960, L = 170, laneH = 12, gap = 4, top = 20, rowH = laneH * 2 + gap + 14;
+  const H = top + rows.length * rowH;
+  const x = (f) => L + f * (W - L);
+  const two = (n) => String(n).padStart(2, '0');
+  const fmt = (ms) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+  const chart = svg('svg', { class: 'limit-chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '上限の帯（直近 7 日と明日）' });
+  for (const n of nightSpans(from, to)) {
+    chart.append(svg('rect', { class: 'night', x: x(n.x0), y: top - 4, width: Math.max(0, x(n.x1) - x(n.x0)), height: H - top + 4 },
+      svg('title', {}, `夜（${SUN_PLACE.name}の日の入り〜日の出） ${fmt(n.from)} 〜 ${fmt(n.to)}`)));
+  }
+  for (const tk of timeTicks(from, to, 8)) {
+    chart.append(svg('line', { class: 'grid', x1: x(tk.f), x2: x(tk.f), y1: top - 4, y2: H }));
+    if (tk.label) chart.append(svg('text', { class: 'axis', x: x(tk.f) + 3, y: 12 }, tk.label));
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * rowH;
+    const lanes = { seven_day: y, five_hour: y + laneH + gap };
+    chart.append(
+      svg('text', { class: 'row-name', x: 0, y: y + laneH - 1 }, r.name, svg('title', {}, r.agents.join(', '))),
+      svg('text', { class: 'axis', x: L - 6, y: lanes.seven_day + laneH - 2, 'text-anchor': 'end' }, '週'),
+      svg('text', { class: 'axis', x: L - 6, y: lanes.five_hour + laneH - 2, 'text-anchor': 'end' }, '5 時間'));
+    for (const b of r.bands) {
+      const label = b.kind === 'five_hour' ? '5 時間' : '週';
+      chart.append(svg('rect', {
+        class: `band k-${b.kind}${b.hit ? ' hit' : ''}${b.active ? ' active' : ''}`,
+        x: x(b.x0), y: lanes[b.kind], width: Math.max(2, x(b.x1) - x(b.x0)), height: laneH, rx: 2,
+      }, svg('title', {}, `${r.name}: ${label}の窓 開始（推定）${fmt(b.start)} 〜 解除 ${fmt(b.reset)}${b.hit ? '（上限に当たった）' : ''}${b.active ? '・いまの窓' : ''}`)));
+    }
+  });
+  if (now >= from && now <= to) {
+    const nx = x((now - from) / (to - from));
+    chart.append(svg('line', { class: 'now', x1: nx, x2: nx, y1: top - 6, y2: H }, svg('title', {}, `いま ${fmt(now)}`)));
+  }
+  const key = (cls, text) => el('span', { class: 'key' }, el('span', { class: `swatch ${cls}` }), text);
+  return el('div', { class: 'limits' }, head,
+    el('div', { class: 'scroll' }, chart),
+    el('p', { class: 'limit-legend sub' }, key('k-five_hour hit', '5 時間の窓'), key('k-seven_day hit', '週の窓'), key('miss', '上限に当たっていない窓'),
+      key('night', `夜（${SUN_PLACE.name}の日の入り〜日の出）`), key('now', 'いま')),
+    el('p', { class: 'note sub' }, '窓の始まりは記録に無いので、解除時刻から窓の長さ（5 時間・7 日）を引いた推定です。行は roster.md の「AI のアカウント」ごと（未記入なら PC ごと）。'));
+}
 // エージェントの ID → roster.md の行
 function agentLink(id, roster, branch, files) {
   if (!id) return el('span', {}, '');
@@ -625,7 +676,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     });
     pcBody.replaceChildren(el('table', {},
       el('thead', {}, el('tr', {}, ...['信号', 'エージェント / PC', '最後の確認', '判断', 'セッション', '次の復帰（上限の解除）', '次の週次の起動', '前に起こした'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...rows)));
+      el('tbody', {}, ...rows)), limitBlock({ pcs, roster, now }));
   }
 
   // タスク

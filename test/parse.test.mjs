@@ -169,7 +169,7 @@ test('project.md のリポジトリの表を読む', () => {
 
 test('名簿を読む（行の番号つき）', () => {
   const r = parseRoster('# 名簿\n\n| ID | PC | 道具 | AI のアカウント | 得意 | 備考 |\n|---|---|---|---|---|---|\n| `pc1-claude` | PC1 | Claude Code | x | y | GitHub: yzknai |\n');
-  assert.deepEqual(r, [{ id: 'pc1-claude', pc: 'PC1', tool: 'Claude Code', note: 'GitHub: yzknai', line: 5 }]);
+  assert.deepEqual(r, [{ id: 'pc1-claude', pc: 'PC1', tool: 'Claude Code', account: 'x', note: 'GitHub: yzknai', line: 5 }]);
 });
 
 test('PR / MR を拾う', () => {
