@@ -174,6 +174,13 @@ export function commitMessage(login, action, ids = []) {
   return oneLine(`[dashboard:${who}] ${action}${tail ? ' ' + tail : ''}`);
 }
 
+// 書き込みの前の確かめ。changes = [{ path }]、treeEntries = 最新の tree（[{ path, sha }]）、blobs = 読んだ時点の Map(path → sha)。
+// 読んだ時点から blob が変わった（ほかで書き換えられた・作られた・消された）ファイルの path を返す
+export function staleChanges(changes, treeEntries, blobs) {
+  const sha = new Map((treeEntries || []).map((e) => [e.path, e.sha]));
+  return changes.filter((c) => sha.get(c.path) !== blobs.get(c.path)).map((c) => c.path);
+}
+
 // 1 つのタスクの書き換えをまとめて行う。edits = { front?: {キー: 値}, answers?: {Q1: '…'}, log?: '出来事' }。
 // front の値が元と同じものは書かない。何か変わったら updated を now にし、ログに 1 行を足す（log が無ければ変更の要約）
 export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
