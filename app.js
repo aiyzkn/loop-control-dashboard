@@ -9,7 +9,7 @@ import {
   countByProject, countByDay, doneRatio,
 } from './parse.js';
 import {
-  PRIORITIES, STATUSES, STAGES, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
+  PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
   tasksPathOf, reopenTask, addendumOnly, copyRequest,
@@ -185,6 +185,7 @@ async function applyLocal(changes, commit) {
     }
     // 読めなければ消しておく（次にこのファイルを書くとき、ほかで変わっていなくても競合として止まる。「読み直す」で直る）
     if (now && now.has(c.path)) ctx.blobs.set(c.path, now.get(c.path)); else ctx.blobs.delete(c.path);
+    if (view && !view.paths.includes(c.path)) view.paths.push(c.path);   // 即時実行の依頼中の印などに使う
     if (c.path === ctx.inboxPath) {
       ctx.inboxText = c.content;
       view.inbox = parseInbox(c.content);
@@ -224,17 +225,16 @@ async function headOf(token, branch) {
 
 class Conflict extends Error {}
 
-// changes = [{ path, content }]（content が null なら、そのファイルを消す）。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
-// ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む
+// changes = [{ path, content }]。読んだ時点から、書き換えるファイルがほかで変わっていたら、上書きせずに Conflict。
+// ほかのファイルだけが変わっていた（PC の状況の更新など）なら、最新の上に積む。
+// 先頭が手元の ctx.head と同じでも、必ず blob を比べる: 自分の書き込みのあと applyLocal が ctx.head を進めるが、
+// 書いていないファイルの blob は読んだ時点のままなので、その間にエージェントが push した変更を見落とす（2026-11-21 に古い版で上書きした）
 async function commitChanges(changes, message) {
   const { token, branch } = ctx;
   let base = await headOf(token, branch);
-  if (base.sha !== ctx.head.sha) {
-    const now = (await gh(token, `${REPO()}/git/trees/${base.tree}?recursive=1`)).body.tree || [];
-    const sha = new Map(now.map((e) => [e.path, e.sha]));
-    const moved = changes.filter((c) => sha.get(c.path) !== ctx.blobs.get(c.path)).map((c) => c.path);
-    if (moved.length) throw new Conflict(`読んだ後に、ほかで書き換えられています: ${moved.join('、')}`);
-  }
+  const now = (await gh(token, `${REPO()}/git/trees/${base.tree}?recursive=1`)).body.tree || [];
+  const moved = staleChanges(changes, now, ctx.blobs);
+  if (moved.length) throw new Conflict(`読んだ後に、ほかで書き換えられています: ${moved.join('、')}`);
   const tree = (await gh(token, `${REPO()}/git/trees`, {
     method: 'POST',
     // content が null のものは消す（archive/ → tasks/ の移動など）
@@ -255,7 +255,7 @@ async function commitChanges(changes, message) {
 
 // 送る（確認の画面から、または並べ替えで確認を省いたとき）。成功したら手元に反映して描き直す（全体は読み直さない）
 async function sendChanges(items, message) {
-  const changes = items.map((it) => ({ path: it.path, content: it.remove ? null : it.after }));
+  const changes = items.map((it) => ({ path: it.path, content: it.after, overwrite: !!it.overwrite }));
   const commit = await commitChanges(changes, message);
   await applyLocal(changes, commit);
   setStatus(`書き込みました（${commit.sha.slice(0, 7)}・${new Date().toLocaleTimeString()}）。ほかの変更は「読み直す」で取り込みます`, 'ok');
@@ -270,10 +270,11 @@ function writeError(e) {
 }
 
 // 確認の画面: 差分を見せ、「送る」でコミットする。items = [{ path, before, after }]
-// remove が true の item は、そのファイルを消す（差分は全行の削除）。back があれば「戻る」で前の画面へ、onSent は送れた後に呼ぶ
-function confirmAndSend(title, items, message, { back, onSent } = {}) {
+// back があれば「戻る」で前の画面へ、onSent は送れた後に呼ぶ
+function confirmAndSend(title, items, message, { back, onSent, note } = {}) {
   const dlg = $('dialog');
   const body = el('div', { class: 'dlg-body' },
+    note ? el('p', { class: 'note' }, note) : null,
     el('p', { class: 'sub' }, `コミット: ${message}`),
     ...items.map((it) => el('div', { class: 'diff-file' },
       el('div', { class: 'diff-path' }, link(blobUrl(ctx.branch, it.path), it.path)),
@@ -309,6 +310,20 @@ function confirmAndSend(title, items, message, { back, onSent } = {}) {
 
 const WHO = () => `dashboard:${ctx.login}`;
 
+// 即時実行の依頼: 指令リポジトリに state/kick/<ID>.json を書く（1 コミット）。PC が 3 分ごと（kick.pollMinutes）に見に行き、
+// ほかのセッションが手を動かしていなければ、新しいウィンドウでセッションを起こす。PC に HTTP の口は開けない
+function requestKick(agentId, task = '', { back } = {}) {
+  if (!ctx || !ctx.canWrite || busy) return;
+  let path, after;
+  try { path = kickRequestPath(agentId); after = kickRequest({ by: WHO(), task }); }
+  catch (e) { setStatus(e.message, 'error'); return; }
+  const title = task ? `このタスクを実行: ${task}（${agentId}）` : `いま実行: ${agentId}`;
+  confirmAndSend(title, [{ path, before: '', after, overwrite: true }], commitMessage(ctx.login, task ? 'このタスクを実行' : 'いま実行', task ? [task] : []), {
+    back,
+    note: `${agentId} の PC が、${task ? `タスク ${task} を先に再開・着手する` : '/auto-loop next を行う'}セッションを起こします。PC は 3 分ごとに見に行くので、起きるまで最大で 3 分と少しかかります。ほかのセッションが手を動かしている・上限の解除待ちのときは、空くまで待ちます（依頼は残ります）。結果は「PC」の表の「即時実行」に出ます`,
+  });
+}
+
 // タスクの書き換えの画面（先頭の priority・status・stage・assignee、質問への回答、ログのメモ）
 function openEditor(t) {
   if (!ctx || !ctx.canWrite || busy) return;
@@ -329,6 +344,17 @@ function openEditor(t) {
   const answers = t.questions.map((q) => ({ q, input: el('input', { name: q.id, placeholder: q.answer ? '置き換えるときだけ書く' : '回答を書く', spellcheck: 'false' }) }));
   const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ。空なら変更の要約', spellcheck: 'false' });
   const row = (label, input, sub) => el('label', { class: 'field' }, el('span', {}, label), input, sub ? el('span', { class: 'sub' }, sub) : null);
+  // このタスクを実行（即時実行の依頼）。宛先は担当のエージェント、無ければ PC の状況のあるエージェントから選ぶ
+  const agentIds = [...new Set([t.claimedBy, ...((view && view.pcs) || []).map((p) => p.agentId)].filter((x) => x && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(x)))];
+  let kickRow = null;
+  if (agentIds.length && !['done', 'dropped', 'draft'].includes(t.status)) {
+    const target = select('kickAgent', agentIds, t.claimedBy && agentIds.includes(t.claimedBy) ? t.claimedBy : agentIds[0]);
+    const kick = el('button', { type: 'button' }, 'このタスクを実行');
+    kick.addEventListener('click', () => requestKick(target.value, t.id, { back: () => openEditor(t) }));
+    kickRow = el('div', {}, el('h3', {}, '即時実行'),
+      el('div', { class: 'fields' }, row('実行するエージェント', target, t.claimedBy ? '担当のエージェント以外を選ぶと、そのエージェントは担当できずに見送ります' : '着手できる（assignee が合う）エージェントを選ぶ')),
+      kick);
+  }
   const msg = el('p', { class: 'status', role: 'status' });
   const next = el('button', { type: 'button', class: 'primary' }, '差分を見る');
   const cancel = el('button', { type: 'button' }, 'やめる');
@@ -351,7 +377,7 @@ function openEditor(t) {
       el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), t.claimedBy ? ` ・ 担当 ${t.claimedBy}（エージェントが作業中のことがあります。状態の書き換えは控えめに）` : ''),
       el('div', { class: 'fields' },
         row('優先度', f.priority, '緊急（urgent）にできるのは利用者だけ（AGENTS.md 7.1）'),
-        row('状態', f.status, 'done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
+        row('状態', f.status, '判断待ち（waiting）・マージ待ち（review）のまま質問にすべて答えると、作業中（doing）に戻します（エージェントの番）。done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
         row('段階', f.stage),
         row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
       answers.length ? el('h3', {}, '利用者への質問と回答') : null,
@@ -359,7 +385,8 @@ function openEditor(t) {
         el('div', {}, el('strong', {}, q.id), ' ', q.question),
         el('div', { class: 'sub' }, '回答: ', q.answer || '（まだ）'),
         input)),
-      el('h3', {}, 'ログ'), note),
+      el('h3', {}, 'ログ'), note,
+      kickRow),
     msg, el('div', { class: 'dlg-actions' }, cancel, next));
   if (!dlg.open) dlg.showModal();
 }
@@ -463,8 +490,8 @@ const prefs = {
   set(k, v) { try { localStorage.setItem(this.key, JSON.stringify({ ...this.all(), [k]: v })); } catch { } },
 };
 
-const STATUS_JA = { doing: '作業中', waiting: '判断待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
-const OPEN = ['doing', 'waiting', 'blocked', 'ready', 'draft'];
+const STATUS_JA = { doing: '作業中', waiting: '判断待ち', review: 'マージ待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
+const OPEN = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
 const PRIORITY_JA = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
 const DECISION_JA = { 'kick-work': '起こした（作業）', 'kick-idle': '起こした（手が空いたとき）', skip: '見送り', error: '失敗' };
 const SIGNAL_JA = { red: '赤（止まっている・失敗）', yellow: '黄（判断待ち・着手待ち・注意）', green: '緑（進んでいる）', off: '消灯（下書き・動きなし）' };
@@ -629,7 +656,7 @@ function repoLinks(p) {
 function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, paths, files, truncated }) {
   const now = Date.now();
   const open = tasks.filter((t) => OPEN.includes(t.status));
-  const active = open.filter((t) => ['doing', 'waiting', 'blocked'].includes(t.status));
+  const active = open.filter((t) => ['doing', 'waiting', 'review', 'blocked'].includes(t.status));
   const taskSigs = open.map((t) => taskSignal(t, now));
   const pcSigs = pcs.map((p) => pcSignal(p, now));
   const overall = overallSignal([...taskSigs, ...pcSigs]);
@@ -660,7 +687,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
   const summary = $('summary');
   summary.replaceChildren(
-    ...[['作業中', counts.doing || 0, 'doing'], ['判断待ち', counts.waiting || 0, 'waiting'], ['止まっている', counts.blocked || 0, 'blocked'], ['着手待ち', counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
+    ...[['作業中', counts.doing || 0, 'doing'], ['判断待ち', counts.waiting || 0, 'waiting'], ['マージ待ち', counts.review || 0, 'review'], ['止まっている', counts.blocked || 0, 'blocked'], ['着手待ち', counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
       .map(([k, v, c]) => el('div', { class: `card c-${c}` + ((c === 'urgent' || c === 'blocked') && v ? ' alert' : '') }, el('div', { class: 'num' }, v), el('div', { class: 'label' }, k))),
   );
   if (truncated) summary.append(el('p', { class: 'note' }, '※ ファイルが多く、一覧の一部しか読めませんでした'));
@@ -673,6 +700,18 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
   // ビジュアル（カード・マトリックス・ツリーマップ）
   renderVisuals({ open, files, projects, branch, now });
+
+  // PC の「即時実行」の欄: 依頼中の印・前の依頼の結果・「いま実行」のボタン
+  const kickCell = (p) => {
+    const id = String(p.agentId || '');
+    const pending = (view && view.paths || []).includes(`state/kick/${id}.json`);
+    const last = p.lastRequest;
+    const btn = ctx && ctx.canWrite && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) ? el('button', { type: 'button', class: 'mini' }, 'いま実行') : null;
+    if (btn) btn.addEventListener('click', () => requestKick(id));
+    return el('div', {}, btn,
+      pending ? el('div', { class: 'sub warn' }, '依頼中（PC が見に行くのを待っている）') : null,
+      last ? el('div', { class: 'sub' }, `前の依頼${last.task ? `（${last.task}）` : ''}: ${last.result || ''}${last.handledAt ? `・${ageText(last.handledAt)}` : ''}${last.kept ? '（残して、やり直し待ち）' : ''}`) : null);
+  };
 
   // PC
   const pcBody = $('pcs');
@@ -695,10 +734,11 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
         el('td', {}, p.nextWakeAt ? `${ageText(p.nextWakeAt)}（${p.nextWakeAt}）` : '—'),
         el('td', {}, p.weeklyNextAt ? `${ageText(p.weeklyNextAt)}（${p.weeklyNextAt}）` : '—'),
         el('td', {}, p.lastLaunchedAt ? `${ageText(p.lastLaunchedAt)}（${p.lastKind || ''}）` : '—'),
+        el('td', {}, kickCell(p)),
       );
     });
     pcBody.replaceChildren(el('table', {},
-      el('thead', {}, el('tr', {}, ...['信号', 'エージェント / PC', '最後の確認', '判断', 'セッション', '次の復帰（上限の解除）', '次の週次の起動', '前に起こした'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['信号', 'エージェント / PC', '最後の確認', '判断', 'セッション', '次の復帰（上限の解除）', '次の週次の起動', '前に起こした', '即時実行'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...rows)), limitBlock({ pcs, roster, now }));
   }
 
@@ -1512,7 +1552,8 @@ async function openMerge(t, x) {
     if (!t) logNote = '関係するタスクが無いので、タスクのログには書いていません';
     else if (ctx.canWrite) {
       const before = ctx.texts.get(t.path);
-      const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）` }, { who: WHO() }).text;
+      // 利用者の番（マージ待ち・判断待ち）なら、作業中（doing）に戻す。残りの PR の確かめと完了はエージェントが行う
+      const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）`, handBack: true }, { who: WHO() }).text;
       try { await commitChanges([{ path: t.path, content: after }], commitMessage(ctx.login, 'PR のマージを記録', [t.id])); logNote = 'タスクのログに記録しました'; }
       catch (e) { logNote = `タスクのログには書けませんでした（${e.message}）。手で記録してください`; }
     } else logNote = '書き込みの権限が無いので、タスクのログには書いていません';
@@ -1526,7 +1567,7 @@ async function openMerge(t, x) {
   });
   dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), el('div', { class: 'dlg-body' }, facts,
     el('p', { class: 'sub' }, t
-      ? `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`
+      ? `タスク ${t.id} から。マージすると、タスクがマージ待ち・判断待ちなら作業中（doing）に戻し、エージェントが残りを確かめて完了にします（このページは finish をしません）`
       : '関係するタスクが見つかりません（タスクの成果物に、この PR の URL が書かれていない）。マージしてもタスクのログには残りません')),
   msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go, prPageButtons(x)));
 }

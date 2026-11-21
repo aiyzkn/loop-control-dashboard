@@ -4,7 +4,9 @@
 import { parseQuestions, compareInPriority } from './parse.js';
 
 export const PRIORITIES = ['urgent', 'high', 'normal', 'low'];
-export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'blocked', 'done', 'dropped'];
+export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'review', 'blocked', 'done', 'dropped'];
+// 利用者の番の状態（waiting = 判断・回答待ち、review = マージ待ち）。回答がそろう・PR をマージすると、エージェントの番（doing）に戻す
+export const USER_TURN = ['waiting', 'review'];
 export const STAGES = ['propose', 'implement', 'merge'];
 
 // 1 行の値にする（改行・制御文字を空白に。前後の空白を除く）
@@ -174,6 +176,32 @@ export function commitMessage(login, action, ids = []) {
   return oneLine(`[dashboard:${who}] ${action}${tail ? ' ' + tail : ''}`);
 }
 
+// 書き込みの前の確かめ。changes = [{ path, overwrite? }]、treeEntries = 最新の tree（[{ path, sha }]）、blobs = 読んだ時点の Map(path → sha)。
+// 読んだ時点から blob が変わった（ほかで書き換えられた・作られた・消された）ファイルの path を返す。
+// overwrite の付いたもの（中身をすべてこのページが決めるファイル。即時実行の依頼）は比べない
+export function staleChanges(changes, treeEntries, blobs) {
+  const sha = new Map((treeEntries || []).map((e) => [e.path, e.sha]));
+  return changes.filter((c) => !c.overwrite && sha.get(c.path) !== blobs.get(c.path)).map((c) => c.path);
+}
+
+// ---- 即時実行の依頼（キットの kick-poll.ps1 が kick.pollMinutes 分ごと（既定 3 分）に見に行き、kick.ps1 -Trigger now で起こす） ----
+
+const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const TASK_ID = /^\d{8}-[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+// 依頼のファイルの場所: state/kick/<エージェントの ID>.json
+export function kickRequestPath(agentId) {
+  if (!AGENT_ID.test(String(agentId || ''))) throw new Error(`エージェントの ID が使えません: ${agentId}`);
+  return `state/kick/${agentId}.json`;
+}
+
+// 依頼の中身。task は任意（空なら /auto-loop next と同じ。あれば、そのタスクを先に再開・着手させる）
+export function kickRequest({ by, task = '', now = isoLocal() }) {
+  const t = String(task || '').trim();
+  if (t && !TASK_ID.test(t)) throw new Error(`タスクの ID が使えません: ${t}`);
+  return JSON.stringify({ requestedAt: now, by: oneLine(by), task: t }, null, 2) + '\n';
+}
+
 // 1 つのタスクの書き換えをまとめて行う。edits = { front?: {キー: 値}, answers?: {Q1: '…'}, log?: '出来事' }。
 // front の値が元と同じものは書かない。何か変わったら updated を now にし、ログに 1 行を足す（log が無ければ変更の要約）
 export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
@@ -189,10 +217,20 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
     front[k] = nv;
     notes.push(nv === null ? `${k} を消す` : `${k}: ${fmNow[k] ?? '（なし）'} → ${nv}`);
   }
+  let answered = 0;
   for (const [qid, ans] of Object.entries(edits.answers || {})) {
     if (!oneLine(ans)) continue;
     out = setAnswer(out, qid, ans);
     notes.push(`${qid} に回答`);
+    answered++;
+  }
+  if (!('status' in front) && USER_TURN.includes(fmNow.status || '')) {
+    const qs = parseQuestions(out);
+    const allAnswered = answered > 0 && qs.length > 0 && qs.every((q) => q.answer);
+    if (allAnswered || edits.handBack) {
+      front.status = 'doing';
+      notes.push(`${allAnswered ? '回答がそろったので' : 'マージしたので'} status: ${fmNow.status} → doing（エージェントの番）`);
+    }
   }
   if (!notes.length && !oneLine(edits.log)) return { text: String(text), changed: false, notes };
   out = setFrontMatter(out, { ...front, updated: now });
@@ -355,7 +393,7 @@ export function githubRepos(projects) {
 export function taskForPr(tasks, url, prsOf) {
   const u = String(url).toLowerCase();
   const hit = tasks.filter((t) => prsOf(t).some((x) => String(x).toLowerCase() === u));
-  return hit.find((t) => ['doing', 'waiting', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
+  return hit.find((t) => ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'].includes(t.status)) || hit[0] || null;
 }
 
 // ---- 完了したタスク（archive/）の扱い: 戻す・追記・写して起票 ----

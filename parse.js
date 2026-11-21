@@ -68,7 +68,7 @@ export function parseTask(path, text) {
 }
 
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
-const STATUS_RANK = { doing: 0, waiting: 1, blocked: 2, ready: 3, draft: 4, done: 5, dropped: 6 };
+const STATUS_RANK = { doing: 0, waiting: 1, review: 2, blocked: 3, ready: 4, draft: 5, done: 6, dropped: 7 };
 export function priorityRank(p) { return p in PRIORITY_RANK ? PRIORITY_RANK[p] : 2; }
 
 // order（任意の数。小さいほど先）。無い・数でなければ null
@@ -283,10 +283,10 @@ export function findPullRequests(text, repos = []) {
 
 const HOUR = 3600 * 1000;
 
-// タスクの信号: red = 止まっている、yellow = 判断待ち・着手待ち（日数によらず）・印が古い（24 時間超）、green = 進んでいる、off = 下書き
+// タスクの信号: red = 止まっている、yellow = 判断待ち・マージ待ち・着手待ち（日数によらず）・印が古い（24 時間超）、green = 進んでいる、off = 下書き
 export function taskSignal(t, now = Date.now()) {
   if (t.status === 'blocked') return 'red';
-  if (t.status === 'waiting' || t.status === 'ready') return 'yellow';
+  if (t.status === 'waiting' || t.status === 'review' || t.status === 'ready') return 'yellow';
   if (t.status === 'doing') {
     const hb = Date.parse(t.heartbeatAt);
     return !Number.isNaN(hb) && now - hb > 24 * HOUR ? 'yellow' : 'green';
@@ -309,7 +309,7 @@ export function overallSignal(signals) {
 }
 
 // 案件ごと・状態ごとの件数（グラフの積み上げ）
-export function countByProject(tasks, statuses = ['doing', 'waiting', 'blocked', 'ready', 'draft']) {
+export function countByProject(tasks, statuses = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft']) {
   const map = new Map();
   for (const t of tasks) {
     if (!statuses.includes(t.status)) continue;
