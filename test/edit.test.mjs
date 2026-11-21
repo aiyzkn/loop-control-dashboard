@@ -98,6 +98,26 @@ test('まとめて書き換え: updated とログ。同じ値は書かない', (
   assert.match(note.text, /\[dashboard:me\] メモだけ\n$/);
 });
 
+test('回答がそろったら doing に戻す（利用者の番 → エージェントの番）', () => {
+  const now = '2026-11-20T08:00:00+09:00';
+  const part = applyTaskEdits(task, { answers: { Q2: 'B' } }, { who: 'dashboard:me', now });
+  assert.match(part.text, /^status: waiting$/m, 'Q3 が未回答なら waiting のまま');
+  const all = applyTaskEdits(task, { answers: { Q2: 'B', Q3: '了解' } }, { who: 'dashboard:me', now });
+  assert.match(all.text, /^status: doing$/m);
+  assert.match(all.text, /^claimed_by: pc1-claude$/m, '担当は保つ');
+  assert.deepEqual(all.notes, ['Q2 に回答', 'Q3 に回答', '回答がそろったので status: waiting → doing（エージェントの番）']);
+  const review = task.replace('status: waiting', 'status: review');
+  assert.match(applyTaskEdits(review, { answers: { Q2: 'B', Q3: 'マージした' } }, { who: 'dashboard:me', now }).text, /^status: doing$/m);
+  const chosen = applyTaskEdits(task, { front: { status: 'blocked' }, answers: { Q2: 'B', Q3: '了解' } }, { who: 'dashboard:me', now });
+  assert.match(chosen.text, /^status: blocked$/m, '状態を選んだときはそれに従う');
+  const ready = task.replace('status: waiting', 'status: ready');
+  assert.match(applyTaskEdits(ready, { answers: { Q2: 'B', Q3: '了解' } }, { who: 'dashboard:me', now }).text, /^status: ready$/m, '利用者の番でなければ変えない');
+  const merged = applyTaskEdits(review, { log: 'PR をマージ', handBack: true }, { who: 'dashboard:me', now });
+  assert.match(merged.text, /^status: doing$/m);
+  assert.match(merged.text, /\[dashboard:me\] PR をマージ\n$/);
+  assert.match(applyTaskEdits(task.replace('status: waiting', 'status: doing'), { log: 'PR をマージ', handBack: true }, { who: 'dashboard:me', now }).text, /^status: doing$/m);
+});
+
 test('order を読み、優先度の中で並べる（無いものは後ろ）', () => {
   assert.equal(parseOrder('15'), 15);
   assert.equal(parseOrder(''), null);

@@ -328,7 +328,7 @@ function openEditor(t) {
       el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), t.claimedBy ? ` ・ 担当 ${t.claimedBy}（エージェントが作業中のことがあります。状態の書き換えは控えめに）` : ''),
       el('div', { class: 'fields' },
         row('優先度', f.priority, '緊急（urgent）にできるのは利用者だけ（AGENTS.md 7.1）'),
-        row('状態', f.status, 'done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
+        row('状態', f.status, '判断待ち（waiting）・マージ待ち（review）のまま質問にすべて答えると、作業中（doing）に戻します（エージェントの番）。done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
         row('段階', f.stage),
         row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
       answers.length ? el('h3', {}, '利用者への質問と回答') : null,
@@ -440,8 +440,8 @@ const prefs = {
   set(k, v) { try { localStorage.setItem(this.key, JSON.stringify({ ...this.all(), [k]: v })); } catch { } },
 };
 
-const STATUS_JA = { doing: '作業中', waiting: '判断待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
-const OPEN = ['doing', 'waiting', 'blocked', 'ready', 'draft'];
+const STATUS_JA = { doing: '作業中', waiting: '判断待ち', review: 'マージ待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
+const OPEN = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
 const PRIORITY_JA = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
 const DECISION_JA = { 'kick-work': '起こした（作業）', 'kick-idle': '起こした（手が空いたとき）', skip: '見送り', error: '失敗' };
 const SIGNAL_JA = { red: '赤（止まっている・失敗）', yellow: '黄（判断待ち・着手待ち・注意）', green: '緑（進んでいる）', off: '消灯（下書き・動きなし）' };
@@ -606,7 +606,7 @@ function repoLinks(p) {
 function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, paths, files, truncated }) {
   const now = Date.now();
   const open = tasks.filter((t) => OPEN.includes(t.status));
-  const active = open.filter((t) => ['doing', 'waiting', 'blocked'].includes(t.status));
+  const active = open.filter((t) => ['doing', 'waiting', 'review', 'blocked'].includes(t.status));
   const taskSigs = open.map((t) => taskSignal(t, now));
   const pcSigs = pcs.map((p) => pcSignal(p, now));
   const overall = overallSignal([...taskSigs, ...pcSigs]);
@@ -637,7 +637,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
   const summary = $('summary');
   summary.replaceChildren(
-    ...[['作業中', counts.doing || 0, 'doing'], ['判断待ち', counts.waiting || 0, 'waiting'], ['止まっている', counts.blocked || 0, 'blocked'], ['着手待ち', counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
+    ...[['作業中', counts.doing || 0, 'doing'], ['判断待ち', counts.waiting || 0, 'waiting'], ['マージ待ち', counts.review || 0, 'review'], ['止まっている', counts.blocked || 0, 'blocked'], ['着手待ち', counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
       .map(([k, v, c]) => el('div', { class: `card c-${c}` + ((c === 'urgent' || c === 'blocked') && v ? ' alert' : '') }, el('div', { class: 'num' }, v), el('div', { class: 'label' }, k))),
   );
   if (truncated) summary.append(el('p', { class: 'note' }, '※ ファイルが多く、一覧の一部しか読めませんでした'));
@@ -1324,7 +1324,8 @@ async function openMerge(t, x) {
     if (!t) logNote = '関係するタスクが無いので、タスクのログには書いていません';
     else if (ctx.canWrite) {
       const before = ctx.texts.get(t.path);
-      const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）` }, { who: WHO() }).text;
+      // 利用者の番（マージ待ち・判断待ち）なら、作業中（doing）に戻す。残りの PR の確かめと完了はエージェントが行う
+      const after = applyTaskEdits(before, { log: `PR ${x.url} をマージ（${method.value}、${String(merged.sha || '').slice(0, 7)}）`, handBack: true }, { who: WHO() }).text;
       try { await commitChanges([{ path: t.path, content: after }], commitMessage(ctx.login, 'PR のマージを記録', [t.id])); logNote = 'タスクのログに記録しました'; }
       catch (e) { logNote = `タスクのログには書けませんでした（${e.message}）。手で記録してください`; }
     } else logNote = '書き込みの権限が無いので、タスクのログには書いていません';
@@ -1338,7 +1339,7 @@ async function openMerge(t, x) {
   });
   dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), el('div', { class: 'dlg-body' }, facts,
     el('p', { class: 'sub' }, t
-      ? `タスク ${t.id} から。マージの後、エージェントがそのタスクを再開するときに確かめます（このページは finish をしません）`
+      ? `タスク ${t.id} から。マージすると、タスクがマージ待ち・判断待ちなら作業中（doing）に戻し、エージェントが残りを確かめて完了にします（このページは finish をしません）`
       : '関係するタスクが見つかりません（タスクの成果物に、この PR の URL が書かれていない）。マージしてもタスクのログには残りません')),
   msg, el('div', { class: 'dlg-actions' }, cancel, info.merged || info.state !== 'open' ? null : method, info.merged || info.state !== 'open' ? null : go, prPageButtons(x)));
 }
