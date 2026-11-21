@@ -217,6 +217,13 @@ export function accountUrl(host, account) {
   return hostUrl(host, a);
 }
 
+// リポジトリ（<owner>/<repo>。GitLab はグループを重ねてよい）のページ。'-'・空・1 段だけのもの（未確定の書き方）は無し
+export function repoUrl(host, repo) {
+  const r = String(repo || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!r || r === '-' || r.split('/').length < 2) return '';
+  return hostUrl(host, r);
+}
+
 const unquote = (s) => String(s || '').trim().replace(/^`+|`+$/g, '').trim();
 
 // project.md の先頭と「## リポジトリ」の表（列: キー・ホスト・リポジトリ・アカウント・本流リモート・基準ブランチ・備考）
@@ -229,7 +236,7 @@ export function parseProject(path, text) {
     const cells = l.trim().replace(/^\||\|$/g, '').split('|').map(unquote);
     if (cells[0] === 'キー' || cells.length < 4) continue;
     const [key, host, repo, account, remote = '', branch = ''] = cells;
-    repos.push({ key, host, repo, account, remote, branch, url: hostUrl(host, repo), accountUrl: accountUrl(host, account) });
+    repos.push({ key, host, repo, account, remote, branch, url: repoUrl(host, repo), accountUrl: accountUrl(host, account) });
   }
   return { path, id: m ? m[1] : (fm.project || ''), title: fm.title || '', stage: fm.default_stage || '', repos };
 }
@@ -262,8 +269,9 @@ export function findPullRequests(text, repos = []) {
   const one = (host) => { const r = repos.filter((x) => String(x.host).toLowerCase() === host && x.url); return r.length === 1 ? r[0] : null; };
   const gh = one('github.com');
   const gl = one('gitlab.com');
-  const plain = s.replace(re, ' ').replace(/https?:\/\/\S+/g, ' ');
-  const ref = /(^|[\s（(、,])([#!])(\d{1,6})(?![\w#!])/g;
+  // コードの囲み（`...`・...）の中は、色コード（#475569）などで PR 番号ではないことが多いので見ない。番号は 5 桁まで
+  const plain = s.replace(re, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
+  const ref = /(^|[\s（(、,])([#!])(\d{1,5})(?![\w#!])/g;
   while ((m = ref.exec(plain))) {
     if (m[2] === '#' && gh) add(`${gh.url}/pull/${m[3]}`, `${gh.repo.split('/').pop()}#${m[3]}`);
     if (m[2] === '!' && gl) add(`${gl.url}/-/merge_requests/${m[3]}`, `${gl.repo.split('/').pop()}!${m[3]}`);
