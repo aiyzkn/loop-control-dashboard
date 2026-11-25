@@ -3,7 +3,7 @@
 // 形は auto-loop スキルの決まり（指令リポジトリの AGENTS.md 3 章）に合わせる。
 import { parseQuestions, compareInPriority } from './parse.js';
 
-export const PRIORITIES = ['urgent', 'high', 'normal', 'low'];
+export const PRIORITIES = ['urgent', 'solo', 'high', 'normal', 'low'];
 export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'review', 'blocked', 'done', 'dropped'];
 // 利用者の番の状態（waiting = 判断・回答待ち、review = マージ待ち）。回答がそろう・PR をマージすると、エージェントの番（doing）に戻す
 export const USER_TURN = ['waiting', 'review'];
@@ -242,7 +242,7 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
 
 export const SOURCES = ['inbox', 'direct', 'file', 'idle'];
 const STAGE_INBOX = { propose: '提案だけ', implement: '実装まで', merge: 'マージまで' };
-const PRIORITY_INBOX = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
+const PRIORITY_INBOX = { urgent: '緊急', solo: '単独', high: '高', normal: '普通', low: '低' };
 
 // 案件の名前（projects/ のフォルダ名）。英数字とハイフン・下線・点
 export function isProjectName(v) {
@@ -478,7 +478,7 @@ export function copyRequest(text, { id, path } = {}) {
     project: fm.project || '',
     title: fm.title || '',
     stage: STAGES.includes(fm.stage) ? fm.stage : 'propose',
-    priority: PRIORITIES.includes(fm.priority) && fm.priority !== 'urgent' ? fm.priority : 'normal',
+    priority: PRIORITIES.includes(fm.priority) && !['urgent', 'solo'].includes(fm.priority) ? fm.priority : 'normal',
     body: [body, origin].filter(Boolean).join('\n\n'),
   };
 }

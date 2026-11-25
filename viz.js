@@ -17,7 +17,7 @@ export function projectSummary(openTasks, archivedPaths = [], projectIds = []) {
     const r = get(t.project);
     r.counts[t.status]++;
     r.open++;
-    if (t.priority === 'urgent' || t.priority === 'high') r.high++;
+    if (['urgent', 'solo', 'high'].includes(t.priority)) r.high++;
     const u = t.updated || t.created || '';
     if (u > r.latest) r.latest = u;
   }

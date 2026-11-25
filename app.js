@@ -376,7 +376,7 @@ function openEditor(t) {
     el('div', { class: 'dlg-body' },
       el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), t.claimedBy ? ` ・ 担当 ${t.claimedBy}（エージェントが作業中のことがあります。状態の書き換えは控えめに）` : ''),
       el('div', { class: 'fields' },
-        row('優先度', f.priority, '緊急（urgent）にできるのは利用者だけ（AGENTS.md 7.1）'),
+        row('優先度', f.priority, '緊急（urgent）・単独（solo）にできるのは利用者だけ（AGENTS.md 7.1）。緊急・単独の着手中は、同じアカウントでほかの高以下を動かさない（7.3）'),
         row('状態', f.status, '判断待ち（waiting）・マージ待ち（review）のまま質問にすべて答えると、作業中（doing）に戻します（エージェントの番）。done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
         row('段階', f.stage),
         row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
@@ -492,7 +492,7 @@ const prefs = {
 
 const STATUS_JA = { doing: '作業中', waiting: '判断待ち', review: 'マージ待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
 const OPEN = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
-const PRIORITY_JA = { urgent: '緊急', high: '高', normal: '普通', low: '低' };
+const PRIORITY_JA = { urgent: '緊急', solo: '単独', high: '高', normal: '普通', low: '低' };
 const DECISION_JA = { 'kick-work': '起こした（作業）', 'kick-idle': '起こした（手が空いたとき）', skip: '見送り', error: '失敗' };
 const SIGNAL_JA = { red: '赤（止まっている・失敗）', yellow: '黄（判断待ち・着手待ち・注意）', green: '緑（進んでいる）', off: '消灯（下書き・動きなし）' };
 
@@ -794,7 +794,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
   const ib = $('inbox');
   ib.replaceChildren(
     el('h3', {}, `受付の未整理 ${inbox.items.length} 件`),
-    inbox.items.length ? el('ul', {}, ...inbox.items.map((i) => el('li', {}, i.urgent ? el('span', { class: 'badge st-blocked' }, '緊急') : null, i.urgent ? ' ' : null, i.heading))) : el('p', { class: 'note' }, 'ありません'),
+    inbox.items.length ? el('ul', {}, ...inbox.items.map((i) => el('li', {}, i.urgent ? el('span', { class: 'badge st-blocked' }, '緊急') : null, i.solo ? el('span', { class: 'badge pr-solo-badge' }, '単独') : null, i.urgent || i.solo ? ' ' : null, i.heading))) : el('p', { class: 'note' }, 'ありません'),
     el('h3', {}, `手が空いた時に実行するタスク ${inbox.idle.length} 件`),
     inbox.idle.length ? el('ul', {}, ...inbox.idle.map((d) => {
       const p = projects.get(d.project);
@@ -1000,7 +1000,7 @@ function buildNewRequestForm(roster) {
   cancel.addEventListener('click', () => $('dialog').close());
   const form = {
     node: el('div', { class: 'dlg-body new-request' },
-      el('p', { class: 'note' }, '依頼を指令リポジトリに書きます。送る前に差分を見せます。緊急（urgent）は、作業中のエージェントが中断して先に行います（AGENTS.md 7.2）。'),
+      el('p', { class: 'note' }, '依頼を指令リポジトリに書きます。送る前に差分を見せます。緊急（urgent）は、作業中のエージェントが中断して先に行います（AGENTS.md 7.2）。単独（solo）は、作業中のタスクの区切りのあと高より先に行い、その着手中は同じアカウントでほかのセッションを動かしません（7.3）。'),
       agents,
       el('div', { class: 'fields' },
         row('書く先', f.dest), row('案件', f.project), row('件名', f.title), slugRow,

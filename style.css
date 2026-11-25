@@ -38,6 +38,7 @@ th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: lef
 th { background: var(--card); white-space: nowrap; }
 td.warn { color: var(--warn); }
 td.pr-urgent { color: var(--err); font-weight: 600; }
+td.pr-solo { color: var(--err); }
 td.pr-high { color: var(--warn); }
 tr.st-blocked td:first-child { color: var(--err); }
 tr.st-review td:first-child { color: var(--st-review); }
@@ -145,6 +146,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .col { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 4px 8px 8px; min-width: 0; }
 .col h3 { margin: 4px 0 6px; }
 .col.pr-urgent h3 { color: var(--err); }
+.col.pr-solo h3 { color: var(--err); }
 .col.pr-high h3 { color: var(--warn); }
 .col-list { min-height: 48px; display: flex; flex-direction: column; gap: 6px; border-radius: 6px; }
 .col-list.over { outline: 2px dashed var(--link); outline-offset: 2px; }
@@ -221,12 +223,14 @@ details.fold > summary h2 { display: inline; margin: 0; }
 .pcard-num { font-size: 26px; font-weight: 600; line-height: 1.3; }
 .pcard-bar { display: block; width: 100%; height: 6px; margin: 4px 0; border-radius: 3px; background: var(--line); }
 .badge.pr-high-badge { background: transparent; border: 1px solid var(--warn); color: var(--warn); }
+.badge.pr-solo-badge { background: transparent; border: 1px solid var(--err); color: var(--err); }
 table.matrix { border-collapse: collapse; min-width: 560px; }
 table.matrix th, table.matrix td { padding: 4px 8px; border: 1px solid var(--line); text-align: center; white-space: nowrap; }
 table.matrix tbody th { text-align: left; font-weight: normal; }
 table.matrix .mx-group { color: var(--muted); font-weight: normal; }
 .mx-cell { background: color-mix(in srgb, var(--link) calc(var(--a, 0) * 100%), transparent); }
 .mx-cell.mx-pr.pr-urgent { background: color-mix(in srgb, var(--err) calc(var(--a, 0) * 100%), transparent); }
+.mx-cell.mx-pr.pr-solo { background: color-mix(in srgb, var(--err) calc(var(--a, 0) * 70%), transparent); }
 .mx-cell.mx-pr.pr-high { background: color-mix(in srgb, var(--warn) calc(var(--a, 0) * 100%), transparent); }
 .mx-cell.zero { color: var(--muted); }
 .mx-total { font-weight: 600; background: var(--card); }
