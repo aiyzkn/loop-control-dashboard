@@ -344,3 +344,34 @@ export function doneRatio(archivedCount, openCount) {
   const all = archivedCount + openCount;
   return all ? archivedCount / all : 0;
 }
+
+// 日時の絶対表示（'2026-11-26 18:16'）。ISO 8601 に書かれた時刻（書いた PC の時刻）のまま出す。読めなければ空
+export function absText(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ''));
+  if (!m || Number.isNaN(Date.parse(iso))) return '';
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+}
+
+// 利用率（PC の状況の usage.fiveHour / usage.sevenDay）の表示。
+// 返すのは { pct: '23.5%' | '', level: 'ok' | 'warn' | 'alert' | 'off', resetsAt: '2026-11-26 18:16' | '', expired }
+// 解除時刻を過ぎた窓は expired（値は前の窓のもの）。70% 以上で warn、90% 以上で alert
+export function usageView(w, now = Date.now()) {
+  if (!w || typeof w !== 'object') return { pct: '', level: 'off', resetsAt: '', expired: false };
+  const v = Number(w.usedPercentage);
+  const has = w.usedPercentage !== undefined && w.usedPercentage !== null && Number.isFinite(v);
+  const r = Date.parse(w.resetsAt);
+  const expired = !Number.isNaN(r) && r <= now;
+  const pct = has ? `${Math.round(v * 10) / 10}%` : '';
+  const level = !has || expired ? 'off' : v >= 90 ? 'alert' : v >= 70 ? 'warn' : 'ok';
+  return { pct, level, resetsAt: absText(w.resetsAt), expired };
+}
+
+// 次の復帰（上限の解除）: 復帰タスクの次の実行（nextWakeAt）、無ければセッションの記録の上限の解除（limitResetAt）。
+// 先の時刻のものだけ。どちらも無ければ null
+export function nextResume(p, now = Date.now()) {
+  for (const [key, kind] of [['nextWakeAt', 'wake'], ['limitResetAt', 'limit']]) {
+    const t = Date.parse(p && p[key]);
+    if (!Number.isNaN(t) && t > now) return { at: p[key], kind };
+  }
+  return null;
+}

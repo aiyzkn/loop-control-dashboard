@@ -227,3 +227,24 @@ test('グラフ用の集計', () => {
   assert.equal(doneRatio(3, 1), 0.75);
   assert.equal(doneRatio(0, 0), 0);
 });
+
+test('PC の利用率・次の復帰の表示', async () => {
+  const { absText, usageView, nextResume } = await import('../parse.js');
+  const now = Date.parse('2026-11-26T16:00:00+09:00');
+  assert.equal(absText('2026-11-26T18:16:13+09:00'), '2026-11-26 18:16');
+  assert.equal(absText('x'), '');
+  assert.equal(absText(undefined), '');
+  assert.deepEqual(usageView({ usedPercentage: 23.46, resetsAt: '2026-11-26T18:16:13+09:00' }, now), { pct: '23.5%', level: 'ok', resetsAt: '2026-11-26 18:16', expired: false });
+  assert.equal(usageView({ usedPercentage: 70, resetsAt: '2026-11-27T08:00:00+09:00' }, now).level, 'warn');
+  assert.equal(usageView({ usedPercentage: 95 }, now).level, 'alert');
+  assert.equal(usageView({ usedPercentage: 0, resetsAt: '2026-11-27T08:00:00+09:00' }, now).pct, '0%');
+  const ex = usageView({ usedPercentage: 99, resetsAt: '2026-11-26T15:00:00+09:00' }, now);
+  assert.equal(ex.expired, true);
+  assert.equal(ex.level, 'off');
+  assert.deepEqual(usageView(undefined, now), { pct: '', level: 'off', resetsAt: '', expired: false });
+  assert.equal(usageView({ resetsAt: '2026-11-27T08:00:00+09:00' }, now).pct, '');
+  assert.deepEqual(nextResume({ nextWakeAt: '2026-11-26T18:00:00+09:00', limitResetAt: '2026-11-26T19:00:00+09:00' }, now), { at: '2026-11-26T18:00:00+09:00', kind: 'wake' });
+  assert.deepEqual(nextResume({ nextWakeAt: '2026-11-26T10:00:00+09:00', limitResetAt: '2026-11-26T19:00:00+09:00' }, now), { at: '2026-11-26T19:00:00+09:00', kind: 'limit' });
+  assert.equal(nextResume({ limitResetAt: '2026-11-26T15:00:00+09:00' }, now), null);
+  assert.equal(nextResume({}, now), null);
+});
