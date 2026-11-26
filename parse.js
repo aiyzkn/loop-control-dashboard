@@ -67,9 +67,9 @@ export function parseTask(path, text) {
   };
 }
 
-const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+const PRIORITY_RANK = { urgent: 0, solo: 1, high: 2, normal: 3, low: 4 };
 const STATUS_RANK = { doing: 0, waiting: 1, review: 2, blocked: 3, ready: 4, draft: 5, done: 6, dropped: 7 };
-export function priorityRank(p) { return p in PRIORITY_RANK ? PRIORITY_RANK[p] : 2; }
+export function priorityRank(p) { return p in PRIORITY_RANK ? PRIORITY_RANK[p] : PRIORITY_RANK.normal; }
 
 // order（任意の数。小さいほど先）。無い・数でなければ null
 export function parseOrder(v) {
@@ -133,10 +133,11 @@ export function parseInbox(text) {
     if (/^##\s+\S/.test(l)) {
       if (/^##\s+手が空いた時に実行するタスク/.test(l)) { mode = 'idle'; continue; }
       mode = 'item';
-      items.push({ heading: l.replace(/^##\s+/, '').trim(), urgent: false });
+      items.push({ heading: l.replace(/^##\s+/, '').trim(), urgent: false, solo: false });
       continue;
     }
     if (mode === 'item' && /^優先[:：]\s*(緊急|urgent)/.test(l)) { items[items.length - 1].urgent = true; continue; }
+      if (mode === 'item' && /^優先[:：]\s*(単独|solo)/.test(l)) { items[items.length - 1].solo = true; continue; }
     if (mode === 'idle') {
       if (/<!--\s*ここから下に追記/.test(l)) { mode = ''; curIdle = null; continue; }
       const h = /^###\s+(.+?)\s*$/.exec(l);

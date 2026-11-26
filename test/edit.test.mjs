@@ -307,3 +307,21 @@ test('mergeVerdict はアカウントに書き込みの権限が無ければ止�
   assert.equal(v.ok, false); assert.equal(v.noAccess, true);
   assert.match(v.reasons[0], /yzknai は aiyzkn\/kit に書き込めません（アカウントの権限/);
 });
+
+// 単独（solo）: 緊急の次・高の前（20261126-priority-solo）
+import { priorityColumns as pc2, PRIORITIES as PR2 } from '../edit.js';
+import { sortTasks as sort2, parseInbox as pi2, priorityRank as rank2 } from '../parse.js';
+test('単独は緊急の次・高の前の列と順になる', () => {
+  assert.deepEqual(PR2, ['urgent', 'solo', 'high', 'normal', 'low']);
+  assert.ok(rank2('urgent') < rank2('solo') && rank2('solo') < rank2('high') && rank2('high') < rank2('normal'));
+  assert.equal(rank2('unknown'), rank2('normal'));
+  const cols = pc2([{ id: 's', priority: 'solo', created: '1' }, { id: 'h', priority: 'high', created: '2' }]);
+  assert.deepEqual(cols.solo.map((t) => t.id), ['s']);
+  assert.deepEqual(cols.high.map((t) => t.id), ['h']);
+});
+test('受付の「優先: 単独」に印が付く（緊急には数えない）', () => {
+  const r = pi2('# 受付\n\n## demo: 単独の件\n優先: 単独\n\n## demo: 緊急の件\n優先: 緊急\n');
+  assert.equal(r.items.length, 2);
+  assert.equal(r.items[0].solo, true); assert.equal(r.items[0].urgent, false);
+  assert.equal(r.urgent, 1);
+});
