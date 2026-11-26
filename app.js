@@ -6,7 +6,7 @@
 import {
   parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember,
   parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal,
-  countByProject, countByDay, doneRatio,
+  countByProject, countByDay, doneRatio, absText, usageView, nextResume,
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
@@ -727,6 +727,24 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
       last ? el('div', { class: 'sub' }, `前の依頼${last.task ? `（${last.task}）` : ''}: ${last.result || ''}${last.handledAt ? `・${ageText(last.handledAt)}` : ''}${last.kept ? '（残して、やり直し待ち）' : ''}`) : null);
   };
 
+  // PC の利用率（5 時間・週）の欄。値は statusline-usage.ps1 が最後に書いた時点のもの（usage.capturedAt）
+  const usageCell = (p, key) => {
+    const u = p.usage;
+    if (!u) return el('td', { title: 'この PC では利用率を書き出していない（キットの install.ps1 -CaptureUsage）' }, el('span', { class: 'sub' }, '—'));
+    const v = usageView(u[key], now);
+    if (!u[key]) return el('td', {}, el('span', { class: 'sub' }, '—'), el('div', { class: 'sub' }, '値なし'));
+    return el('td', {},
+      v.expired ? el('span', { class: 'sub' }, `解除済み（前の窓 ${v.pct || '?'}）`) : el('span', { class: `usage u-${v.level}` }, v.pct || '?'),
+      v.resetsAt ? el('div', { class: 'sub' }, `解除 ${v.resetsAt}`) : null,
+      u.capturedAt ? el('div', { class: 'sub' }, `値: ${ageText(u.capturedAt)}`) : null);
+  };
+  // 次の復帰（上限の解除）: 復帰タスクの次の実行、無ければセッションの記録の上限の解除。どちらも無ければ「なし」
+  const resumeCell = (p) => {
+    const r = nextResume(p, now);
+    if (!r) return el('td', {}, el('span', { class: 'sub' }, 'なし'), el('div', { class: 'sub' }, '上限の解除待ちは無い'));
+    return el('td', {}, `${absText(r.at)}（${ageText(r.at)}）`, el('div', { class: 'sub' }, r.kind === 'wake' ? '復帰タスク' : 'セッションの記録の上限の解除'));
+  };
+
   // PC
   const pcBody = $('pcs');
   if (pcs.length === 0) {
@@ -742,17 +760,19 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
       return el('tr', {},
         el('td', {}, signal(pcSignal(p, now))),
         el('td', {}, agentLink(p.agentId || '', roster, branch, files), el('div', { class: 'sub' }, p.pc || '', file ? ' ・ ' : '', file ? link(blobUrl(branch, file), 'JSON') : null)),
+        usageCell(p, 'fiveHour'),
+        usageCell(p, 'sevenDay'),
         el('td', { class: stale ? 'warn' : '' }, ageText(p.updatedAt), el('div', { class: 'sub' }, p.updatedAt || '')),
         el('td', {}, DECISION_JA[p.decision] || p.decision || '', el('div', { class: 'sub' }, p.reason || '')),
         el('td', {}, sess),
-        el('td', {}, p.nextWakeAt ? `${ageText(p.nextWakeAt)}（${p.nextWakeAt}）` : '—'),
+        resumeCell(p),
         el('td', {}, p.weeklyNextAt ? `${ageText(p.weeklyNextAt)}（${p.weeklyNextAt}）` : '—'),
         el('td', {}, p.lastLaunchedAt ? `${ageText(p.lastLaunchedAt)}（${p.lastKind || ''}）` : '—'),
         el('td', {}, kickCell(p)),
       );
     });
     pcBody.replaceChildren(el('table', {},
-      el('thead', {}, el('tr', {}, ...['信号', 'エージェント / PC', '最後の確認', '判断', 'セッション', '次の復帰（上限の解除）', '次の週次の起動', '前に起こした', '即時実行'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['信号', 'エージェント / PC', '5 時間の利用', '週の利用', '最後の確認', '判断', 'セッション', '次の復帰（上限の解除）', '次の週次の起動', '前に起こした', '即時実行'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...rows)), limitBlock({ pcs, roster, now }));
   }
 

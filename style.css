@@ -127,6 +127,11 @@ tr.st-waiting td:first-child { color: var(--warn); }
 .day-chart .axis { fill: var(--muted); font-size: 7px; }
 
 .sessions { display: flex; flex-wrap: wrap; gap: 4px; }
+/* PC の利用率（5 時間・週） */
+.usage { font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage.u-ok { color: var(--ok); }
+.usage.u-warn { color: var(--warn); }
+.usage.u-alert { color: var(--err); }
 .pill { padding: 0 6px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
 .pill.zero { color: var(--muted); opacity: 0.6; }
 .pill.s-working:not(.zero) { border-color: var(--st-doing); color: var(--st-doing); }
