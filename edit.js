@@ -202,7 +202,7 @@ export function kickRequest({ by, task = '', now = isoLocal() }) {
   return JSON.stringify({ requestedAt: now, by: oneLine(by), task: t }, null, 2) + '\n';
 }
 
-// 1 つのタスクの書き換えをまとめて行う。edits = { front?: {キー: 値}, answers?: {Q1: '…'}, log?: '出来事' }。
+// 1 つのタスクの書き換えをまとめて行う。edits = { front?: {キー: 値}, answers?: {Q1: '…'}, instruction?: '利用者からの指示', log?: '出来事' }。
 // front の値が元と同じものは書かない。何か変わったら updated を now にし、ログに 1 行を足す（log が無ければ変更の要約）
 export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
   let out = String(text);
@@ -218,6 +218,10 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
     notes.push(nv === null ? `${k} を消す` : `${k}: ${fmNow[k] ?? '（なし）'} → ${nv}`);
   }
   let answered = 0;
+  if (oneLine(edits.instruction)) {
+    out = appendInstruction(out, edits.instruction, { who, now });
+    notes.push('指示を追加');
+  }
   for (const [qid, ans] of Object.entries(edits.answers || {})) {
     if (!oneLine(ans)) continue;
     out = setAnswer(out, qid, ans);
@@ -481,4 +485,51 @@ export function copyRequest(text, { id, path } = {}) {
     priority: PRIORITIES.includes(fm.priority) && !['urgent', 'solo'].includes(fm.priority) ? fm.priority : 'normal',
     body: [body, origin].filter(Boolean).join('\n\n'),
   };
+}
+
+// 文の中の URL（http・https）を切り出す。[{ text }, { url }] の並び。URL の直後の句読点・閉じかっこ（全角・半角）は URL に含めない
+// （「…/pull/3）」「…/pull/3。」の形が多いため）。半角の ) は、URL の中に ( が無いときだけ外す
+export function linkSegments(text) {
+  const s = String(text ?? '');
+  const out = [];
+  const re = /https?:\/\/[^\s<>"'`、。，．「」『』（）【】［］]+/g;
+  let last = 0;
+  for (const m of s.matchAll(re)) {
+    let url = m[0];
+    while (/[.,;:!?)\]}]$/.test(url) && !(url.endsWith(')') && url.includes('('))) url = url.slice(0, -1);
+    if (!/^https?:\/\/[^/]/.test(url)) continue;
+    if (m.index > last) out.push({ text: s.slice(last, m.index) });
+    out.push({ url });
+    last = m.index + url.length;
+  }
+  if (last < s.length) out.push({ text: s.slice(last) });
+  return out;
+}
+
+// 利用者からの指示（質問への回答とは別に、その場で思いついたこと）を「## 利用者への質問と回答」の末尾に足す。
+// 形: `- 指示（<日付>、<書き手>）: <1 行目>`、2 行目以降は 2 文字下げる。節が無ければ「## 決定事項」の前（無ければ「## ログ」の前）に作る。
+// 書き換えの画面から applyTaskEdits の instruction で使う
+export function appendInstruction(text, body, { who, now = isoLocal() } = {}) {
+  const b = safeBody(body);
+  if (!b) throw new Error('指示が空です');
+  const src = String(text);
+  const eol = eolOf(src);
+  const lines = src.split(/\r?\n/);
+  const [first, ...rest] = b.split('\n');
+  const entry = [`- 指示（${now.slice(0, 10)}、${oneLine(who)}）: ${first}`, ...rest.map((l) => (l ? `  ${l}` : ''))];
+  let start = lines.findIndex((l) => l.trim() === '## 利用者への質問と回答');
+  if (start < 0) {
+    let at = lines.findIndex((l) => l.trim() === '## 決定事項');
+    if (at < 0) at = lines.findIndex((l) => l.trim() === '## ログ');
+    if (at < 0) at = lines.length;
+    lines.splice(at, 0, '## 利用者への質問と回答', '', ...entry, '');
+    return lines.join(eol);
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) if (/^## /.test(lines[i])) { end = i; break; }
+  let last = start;
+  for (let i = start + 1; i < end; i++) if (lines[i].trim() !== '') last = i;
+  const ins = last === start ? ['', ...entry] : entry;
+  lines.splice(last + 1, 0, ...ins);
+  return lines.join(eol);
 }

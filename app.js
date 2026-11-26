@@ -12,7 +12,7 @@ import {
   PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
-  tasksPathOf, reopenTask, addendumOnly, copyRequest,
+  tasksPathOf, reopenTask, addendumOnly, copyRequest, linkSegments,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
   calendarDays, sumDays, gridCells, timeTicks, limitRows, nightSpans, SUN_PLACE } from './viz.js';
@@ -46,6 +46,14 @@ const svg = (tag, attrs = {}, ...children) => {
 };
 // href が空なら、ただの文字にする
 const link = (href, text, cls) => (href ? el('a', { href, class: cls }, text) : el('span', { class: cls }, text));
+// 文の中の URL を、別のタブで開くリンクにする（質問・回答など、エージェントが書いた文。コピーしなくても開ける）
+const linkify = (text) => linkSegments(text).map((p) => (p.url ? link(p.url, p.url) : p.text));
+// ダイアログの右上の「×」（閉じる）。下の操作のボタンが画面の外に出ても閉じられるように。Esc でも閉じる
+function closeX(dlg) {
+  const b = el('button', { type: 'button', class: 'dlg-close', title: '閉じる（Esc）', 'aria-label': '閉じる' }, '×');
+  b.addEventListener('click', () => { if (!busy) dlg.close(); });
+  return b;
+}
 
 function loadToken() {
   try { return sessionStorage.getItem(KEY) || localStorage.getItem(KEY) || ''; } catch { return ''; }
@@ -343,6 +351,8 @@ function openEditor(t) {
   };
   const answers = t.questions.map((q) => ({ q, input: el('input', { name: q.id, placeholder: q.answer ? '置き換えるときだけ書く' : '回答を書く', spellcheck: 'false' }) }));
   const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ。空なら変更の要約', spellcheck: 'false' });
+  // 質問への回答とは別の、その場で思いついた指示。「利用者への質問と回答」の末尾に「- 指示（日付、書き手）: …」で足す
+  const instruction = el('textarea', { name: 'instruction', rows: '3', placeholder: '（任意）質問への回答とは別に、エージェントへの指示・追加の依頼。複数行で書けます', spellcheck: 'false' });
   const row = (label, input, sub) => el('label', { class: 'field' }, el('span', {}, label), input, sub ? el('span', { class: 'sub' }, sub) : null);
   // このタスクを実行（即時実行の依頼）。宛先は担当のエージェント、無ければ PC の状況のあるエージェントから選ぶ
   const agentIds = [...new Set([t.claimedBy, ...((view && view.pcs) || []).map((p) => p.agentId)].filter((x) => x && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(x)))];
@@ -352,7 +362,7 @@ function openEditor(t) {
     const kick = el('button', { type: 'button' }, 'このタスクを実行');
     kick.addEventListener('click', () => requestKick(target.value, t.id, { back: () => openEditor(t) }));
     kickRow = el('div', {}, el('h3', {}, '即時実行'),
-      el('div', { class: 'fields' }, row('実行するエージェント', target, t.claimedBy ? '担当のエージェント以外を選ぶと、そのエージェントは担当できずに見送ります' : '着手できる（assignee が合う）エージェントを選ぶ')),
+      el('div', { class: 'fields' }, row('実行するエージェント', target, t.claimedBy ? `担当のエージェント以外を選ぶと、選んだエージェントの PC が、依頼を担当の ${t.claimedBy} に回します（エスカレーション。届くまで最大で 2 回の見回り分）` : '着手できる（assignee が合う）エージェントを選ぶ。合わないエージェントを選ぶと、assignee のエージェント（ID で指定されているとき）に依頼を回します')),
       kick);
   }
   const msg = el('p', { class: 'status', role: 'status' });
@@ -365,14 +375,14 @@ function openEditor(t) {
     try {
       const r = applyTaskEdits(text, {
         front: { priority: f.priority.value, status: f.status.value, stage: f.stage.value, assignee: f.assignee.value },
-        answers: ans, log: note.value,
+        answers: ans, instruction: instruction.value, log: note.value,
       }, { who: WHO() });
       if (!r.changed) { msg.className = 'status'; msg.textContent = '変わったところがありません'; return; }
       confirmAndSend(`書き換えの確認: ${t.id}`, [{ path: t.path, before: text, after: r.text }], commitMessage(ctx.login, '書き換え', [t.id]));
     } catch (e) { msg.className = 'status error'; msg.textContent = e.message; }
   });
   dlg.replaceChildren(
-    el('h2', {}, `書き換え: ${t.title || t.id}`),
+    el('div', { class: 'dlg-head' }, el('h2', {}, `書き換え: ${t.title || t.id}`), closeX(dlg)),
     el('div', { class: 'dlg-body' },
       el('p', { class: 'sub' }, link(blobUrl(ctx.branch, t.path), t.path), t.claimedBy ? ` ・ 担当 ${t.claimedBy}（エージェントが作業中のことがあります。状態の書き換えは控えめに）` : ''),
       el('div', { class: 'fields' },
@@ -382,9 +392,13 @@ function openEditor(t) {
         row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
       answers.length ? el('h3', {}, '利用者への質問と回答') : null,
       ...answers.map(({ q, input }) => el('div', { class: 'question' },
-        el('div', {}, el('strong', {}, q.id), ' ', q.question),
-        el('div', { class: 'sub' }, '回答: ', q.answer || '（まだ）'),
+        el('div', {}, el('strong', {}, q.id), ' ', ...linkify(q.question)),
+        q.details && q.details.length ? el('ul', { class: 'q-details sub' }, ...q.details.map((d) => el('li', {}, ...linkify(d)))) : null,
+        el('div', { class: 'sub' }, '回答: ', ...(q.answer ? linkify(q.answer) : ['（まだ）'])),
         input)),
+      el('h3', {}, '指示（回答とは別に）'),
+      el('label', { class: 'field' }, instruction,
+        el('span', { class: 'sub' }, '「利用者への質問と回答」の末尾に「- 指示（日付、書き手）: …」として足します。状態は変えません（エージェントは、次に起きたときに読みます。すぐに動かすなら下の「即時実行」）')),
       el('h3', {}, 'ログ'), note,
       kickRow),
     msg, el('div', { class: 'dlg-actions' }, cancel, next));
@@ -799,7 +813,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     inbox.idle.length ? el('ul', {}, ...inbox.idle.map((d) => {
       const p = projects.get(d.project);
       return el('li', {}, link(p ? blobUrl(branch, p.path) : '', d.project), `: ${d.title}`,
-        el('span', { class: 'sub' }, `（${d.stage === 'implement' ? '実装まで' : '提案だけ'}・${d.interval || '週 1 回'}・最終実施 ${d.last || 'なし'}）`));
+        el('span', { class: 'sub' }, `（${d.stage === 'implement' ? '実装まで' : '提案だけ'}・${d.interval || '毎日'}・最終実施 ${d.last || 'なし'}）`));
     })) : el('p', { class: 'note' }, 'ありません'),
     files.inbox ? el('p', {}, link(blobUrl(branch, files.inbox), 'inbox.md を GitHub で開く')) : null,
   );
@@ -1484,7 +1498,7 @@ async function openMerge(t, x) {
   const msg = el('p', { class: 'status', role: 'status' }, '読んでいます…');
   const cancel = el('button', { type: 'button' }, '閉じる');
   cancel.addEventListener('click', () => dlg.close());
-  dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), msg, el('div', { class: 'dlg-actions' }, cancel));
+  dlg.replaceChildren(el('div', { class: 'dlg-head' }, el('h2', {}, `PR: ${x.label}`), closeX(dlg)), msg, el('div', { class: 'dlg-actions' }, cancel));
   if (!dlg.open) dlg.showModal();
   const api = `/repos/${pr.owner}/${pr.repo}`;
   let info;
@@ -1510,7 +1524,7 @@ async function openMerge(t, x) {
     msg.textContent = e.status === 404 || e.status === 403
       ? `${pr.owner}/${pr.repo} の PR を読めません（${e.status}）。トークンの対象リポジトリに ${pr.owner}/${pr.repo} を入れ、Pull requests の権限を付けてください`
       : (e.message || String(e));
-    dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), msg, el('div', { class: 'dlg-actions' }, cancel, prPageButtons(x)));
+    dlg.replaceChildren(el('div', { class: 'dlg-head' }, el('h2', {}, `PR: ${x.label}`), closeX(dlg)), msg, el('div', { class: 'dlg-actions' }, cancel, prPageButtons(x)));
     return;
   }
   const v = mergeVerdict(info, checks, { canPush, login: ctx.login, repo: `${pr.owner}/${pr.repo}` });
@@ -1565,7 +1579,7 @@ async function openMerge(t, x) {
     openPrsCache = null;   // 未マージの PR の一覧も読み直す
     load(ctx.token).catch(showError);
   });
-  dlg.replaceChildren(el('h2', {}, `PR: ${x.label}`), el('div', { class: 'dlg-body' }, facts,
+  dlg.replaceChildren(el('div', { class: 'dlg-head' }, el('h2', {}, `PR: ${x.label}`), closeX(dlg)), el('div', { class: 'dlg-body' }, facts,
     el('p', { class: 'sub' }, t
       ? `タスク ${t.id} から。マージすると、タスクがマージ待ち・判断待ちなら作業中（doing）に戻し、エージェントが残りを確かめて完了にします（このページは finish をしません）`
       : '関係するタスクが見つかりません（タスクの成果物に、この PR の URL が書かれていない）。マージしてもタスクのログには残りません')),

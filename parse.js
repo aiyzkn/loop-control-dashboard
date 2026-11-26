@@ -109,12 +109,15 @@ export function parseQuestions(text) {
     if (fence || /^\s*<!--/.test(l)) return;
     const q = /^-\s*(Q\d+)(?![\w])\s*(.*)$/.exec(l);
     if (q) {
-      cur = { id: q[1], question: q[2].replace(/^[（(][^）)]*[）)]\s*/, '').replace(/^[:：]\s*/, '').trim(), answer: '', answerLine: -1, line: i };
+      cur = { id: q[1], question: q[2].replace(/^[（(][^）)]*[）)]\s*/, '').replace(/^[:：]\s*/, '').trim(), answer: '', answerLine: -1, line: i, details: [] };
       out.push(cur);
       return;
     }
     const a = /^\s+-\s*回答[:：]\s*(.*)$/.exec(l);
-    if (a && cur && cur.answerLine < 0) { cur.answer = a[1].trim(); cur.answerLine = i; }
+    if (a && cur && cur.answerLine < 0) { cur.answer = a[1].trim(); cur.answerLine = i; return; }
+    // 質問の下の字下げした行（PR の URL・選択肢など）。2 つめ以降の回答の行も含める。質問でない行（- 指示 …）で区切る
+    if (cur && /^\s+\S/.test(l)) cur.details.push(l.trim().replace(/^-\s*/, ''));
+    else if (/^\S/.test(l)) cur = null;
   });
   return out;
 }
