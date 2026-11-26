@@ -732,7 +732,8 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     const u = p.usage;
     if (!u) return el('td', { title: 'この PC では利用率を書き出していない（キットの install.ps1 -CaptureUsage）' }, el('span', { class: 'sub' }, '—'));
     const v = usageView(u[key], now);
-    if (!u[key]) return el('td', {}, el('span', { class: 'sub' }, '—'), el('div', { class: 'sub' }, '値なし'));
+    // 5 時間の窓は、切れたあと次の窓が始まるまで、ステータスラインの JSON に出ない（キットの古い版では前の窓の値も消える）
+    if (!u[key]) return el('td', { title: key === 'fiveHour' ? '最後に書き出した時点の値に 5 時間の窓が無い（窓が切れたあと、まだ次の窓が始まっていない など）' : '最後に書き出した時点の値に週の窓が無い' }, el('span', { class: 'sub' }, '—'), el('div', { class: 'sub' }, '値なし'));
     return el('td', {},
       v.expired ? el('span', { class: 'sub' }, `解除済み（前の窓 ${v.pct || '?'}）`) : el('span', { class: `usage u-${v.level}` }, v.pct || '?'),
       v.resetsAt ? el('div', { class: 'sub' }, `解除 ${v.resetsAt}`) : null,
