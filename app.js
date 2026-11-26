@@ -813,7 +813,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     inbox.idle.length ? el('ul', {}, ...inbox.idle.map((d) => {
       const p = projects.get(d.project);
       return el('li', {}, link(p ? blobUrl(branch, p.path) : '', d.project), `: ${d.title}`,
-        el('span', { class: 'sub' }, `（${d.stage === 'implement' ? '実装まで' : '提案だけ'}・${d.interval || '週 1 回'}・最終実施 ${d.last || 'なし'}）`));
+        el('span', { class: 'sub' }, `（${d.stage === 'implement' ? '実装まで' : '提案だけ'}・${d.interval || '毎日'}・最終実施 ${d.last || 'なし'}）`));
     })) : el('p', { class: 'note' }, 'ありません'),
     files.inbox ? el('p', {}, link(blobUrl(branch, files.inbox), 'inbox.md を GitHub で開く')) : null,
   );
