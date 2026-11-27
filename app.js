@@ -7,6 +7,7 @@ import {
   parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember,
   parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal,
   countByProject, countByDay, doneRatio, absText, usageView, nextResume,
+  taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN,
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
@@ -462,8 +463,8 @@ function renderBoard(open, { pending = false } = {}) {
       const down = () => moveTask(columns, t.id, p, i + 1);
       const left = () => moveTask(columns, t.id, PRIORITIES[pi - 1], columns[PRIORITIES[pi - 1]].length);
       const right = () => moveTask(columns, t.id, PRIORITIES[pi + 1], 0);
-      const card = el('div', { class: `task-card st-${t.status}`, draggable: 'true', tabindex: '0', 'data-id': t.id, 'aria-label': `${t.title || t.id}（${PRIORITY_JA[p]}の ${i + 1} 番目）。Alt + 矢印キーで動かす` },
-        el('div', {}, el('span', { class: `badge st-${t.status}` }, STATUS_JA[t.status] || t.status), ' ', el('span', { class: 'sub' }, t.project)),
+      const card = el('div', { class: `task-card st-${t.status} ph-${taskPhase(t, runningTaskIds((view && view.pcs) || []))}`, draggable: 'true', tabindex: '0', 'data-id': t.id, 'aria-label': `${t.title || t.id}（${PRIORITY_JA[p]}の ${i + 1} 番目）。Alt + 矢印キーで動かす` },
+        el('div', {}, phaseBadge(t), ' ', el('span', { class: 'sub' }, t.project)),
         el('div', { class: 'card-title' }, t.title || t.id),
         el('div', { class: 'card-foot' }, el('span', { class: 'sub' }, t.order != null ? `order ${t.order}` : 'order なし'),
           el('span', { class: 'card-btns' },
@@ -504,7 +505,17 @@ const prefs = {
   set(k, v) { try { localStorage.setItem(this.key, JSON.stringify({ ...this.all(), [k]: v })); } catch { } },
 };
 
-const STATUS_JA = { doing: '作業中', waiting: '判断待ち', review: 'マージ待ち', blocked: '止まっている', ready: '着手待ち', draft: '下書き' };
+// status の値ごとの名前（帯グラフ・凡例・書き換えの選択肢）。色は「いま誰の番か」で分ける（Claude = 暖色、利用者 = 寒色）
+const STATUS_JA = { doing: 'Claude 作業中', waiting: '利用者の判断待ち', review: '利用者のマージ待ち', blocked: '外部要因で停止', ready: 'Claude 着手待ち', draft: '下書き' };
+const TURN_JA = { agent: 'Claude の番', user: '利用者の番', other: '' };
+
+// 一覧のラベル: status を、待ちの種類（wait）・確認待ち・実行中（PC の状況の running）まで分けて出す
+function phaseBadge(t) {
+  const ph = taskPhase(t, runningTaskIds((view && view.pcs) || []));
+  const turn = TURN_JA[PHASE_TURN[ph]] || '';
+  const tip = [turn, `status: ${t.status}`, t.wait ? `wait: ${t.wait}` : ''].filter(Boolean).join('・');
+  return el('span', { class: `badge ph-${ph}`, title: tip }, PHASE_JA[ph] || STATUS_JA[t.status] || t.status);
+}
 const OPEN = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
 const PRIORITY_JA = { urgent: '緊急', solo: '単独', high: '高', normal: '普通', low: '低' };
 const DECISION_JA = { 'kick-work': '起こした（作業）', 'kick-idle': '起こした（手が空いたとき）', skip: '見送り', error: '失敗' };
@@ -701,7 +712,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
 
   const summary = $('summary');
   summary.replaceChildren(
-    ...[['作業中', counts.doing || 0, 'doing'], ['判断待ち', counts.waiting || 0, 'waiting'], ['マージ待ち', counts.review || 0, 'review'], ['止まっている', counts.blocked || 0, 'blocked'], ['着手待ち', counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
+    ...[[STATUS_JA.doing, counts.doing || 0, 'doing'], [STATUS_JA.waiting, counts.waiting || 0, 'waiting'], [STATUS_JA.review, counts.review || 0, 'review'], [STATUS_JA.blocked, counts.blocked || 0, 'blocked'], [STATUS_JA.ready, counts.ready || 0, 'ready'], ['受付の未整理', inbox.items.length, 'inbox'], ['緊急', urgent, 'urgent']]
       .map(([k, v, c]) => el('div', { class: `card c-${c}` + ((c === 'urgent' || c === 'blocked') && v ? ' alert' : '') }, el('div', { class: 'num' }, v), el('div', { class: 'label' }, k))),
   );
   if (truncated) summary.append(el('p', { class: 'note' }, '※ ファイルが多く、一覧の一部しか読めませんでした'));
@@ -794,7 +805,7 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
         const who = t.claimedBy || t.assignee;
         return el('tr', { class: 'st-' + t.status },
           el('td', {}, signal(taskSignal(t, now))),
-          el('td', {}, el('span', { class: `badge st-${t.status}` }, STATUS_JA[t.status] || t.status)),
+          el('td', {}, phaseBadge(t)),
           el('td', { class: 'pr-' + t.priority }, PRIORITY_JA[t.priority] || t.priority),
           el('td', {}, link(p ? blobUrl(branch, p.path) : '', t.project)),
           el('td', {}, link(blobUrl(branch, t.path), t.title || t.id), el('div', { class: 'sub' }, t.id)),
