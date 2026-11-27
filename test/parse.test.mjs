@@ -234,14 +234,17 @@ test('PC の利用率・次の復帰の表示', async () => {
   assert.equal(absText('2026-11-26T18:16:13+09:00'), '2026-11-26 18:16');
   assert.equal(absText('x'), '');
   assert.equal(absText(undefined), '');
-  assert.deepEqual(usageView({ usedPercentage: 23.46, resetsAt: '2026-11-26T18:16:13+09:00' }, now), { pct: '23.5%', level: 'ok', resetsAt: '2026-11-26 18:16', expired: false });
+  assert.deepEqual(usageView({ usedPercentage: 23.46, resetsAt: '2026-11-26T18:16:13+09:00' }, now), { pct: '23.5%', level: 'ok', resetsAt: '2026-11-26 18:16', expired: false, prevPct: '' });
   assert.equal(usageView({ usedPercentage: 70, resetsAt: '2026-11-27T08:00:00+09:00' }, now).level, 'warn');
   assert.equal(usageView({ usedPercentage: 95 }, now).level, 'alert');
   assert.equal(usageView({ usedPercentage: 0, resetsAt: '2026-11-27T08:00:00+09:00' }, now).pct, '0%');
   const ex = usageView({ usedPercentage: 99, resetsAt: '2026-11-26T15:00:00+09:00' }, now);
   assert.equal(ex.expired, true);
-  assert.equal(ex.level, 'off');
-  assert.deepEqual(usageView(undefined, now), { pct: '', level: 'off', resetsAt: '', expired: false });
+  // 解除時刻を過ぎた窓は、読み込み時点の値（0%）を出し、前の窓の値は prevPct に残す
+  assert.deepEqual(ex, { pct: '0%', level: 'ok', resetsAt: '2026-11-26 15:00', expired: true, prevPct: '99%' });
+  assert.equal(usageView({ resetsAt: '2026-11-26T15:00:00+09:00' }, now).prevPct, '');
+  assert.equal(usageView({ usedPercentage: 23.46, resetsAt: '2026-11-26T18:16:13+09:00' }, now).prevPct, '');
+  assert.deepEqual(usageView(undefined, now), { pct: '', level: 'off', resetsAt: '', expired: false, prevPct: '' });
   assert.equal(usageView({ resetsAt: '2026-11-27T08:00:00+09:00' }, now).pct, '');
   assert.deepEqual(nextResume({ nextWakeAt: '2026-11-26T18:00:00+09:00', limitResetAt: '2026-11-26T19:00:00+09:00' }, now), { at: '2026-11-26T18:00:00+09:00', kind: 'wake' });
   assert.deepEqual(nextResume({ nextWakeAt: '2026-11-26T10:00:00+09:00', limitResetAt: '2026-11-26T19:00:00+09:00' }, now), { at: '2026-11-26T19:00:00+09:00', kind: 'limit' });
