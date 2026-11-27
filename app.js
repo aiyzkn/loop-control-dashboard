@@ -735,9 +735,9 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     // 5 時間の窓は、切れたあと次の窓が始まるまで、ステータスラインの JSON に出ない（キットの古い版では前の窓の値も消える）
     if (!u[key]) return el('td', { title: key === 'fiveHour' ? '最後に書き出した時点の値に 5 時間の窓が無い（窓が切れたあと、まだ次の窓が始まっていない など）' : '最後に書き出した時点の値に週の窓が無い' }, el('span', { class: 'sub' }, '—'), el('div', { class: 'sub' }, '値なし'));
     // 解除時刻を過ぎた窓は、読み込み時点の値（新しい窓なので 0%）を出す。前の窓の値と解除時刻は小さく添える
-    if (v.expired) return el('td', { title: '書き出した値の窓は、読み込み時点で解除時刻を過ぎている。新しい窓は 0% から数える（書き出しのあと使った分は、次の書き出しまで出ない）' },
+    if (v.expired) return el('td', { title: '届いている値の窓は、読み込み時点で解除時刻を過ぎている。新しい窓の値は、PC がステータスラインの値を見回り（kick-poll.ps1）で push するまで届かない。その間は 0% と推定して出す（実際には使っていることがある）' },
       el('span', { class: `usage u-${v.level}` }, v.pct),
-      el('div', { class: 'sub' }, `読み込み時点（前の窓 ${v.prevPct || '?'}・${v.resetsAt} に解除）`),
+      el('div', { class: 'sub warn' }, `推定（窓の解除後の値がまだ届いていない。前の窓 ${v.prevPct || '?'}・${v.resetsAt} に解除）`),
       u.capturedAt ? el('div', { class: 'sub' }, `値: ${ageText(u.capturedAt)}`) : null);
     return el('td', {},
       el('span', { class: `usage u-${v.level}` }, v.pct || '?'),
