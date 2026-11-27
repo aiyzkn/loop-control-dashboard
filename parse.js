@@ -59,12 +59,72 @@ export function parseTask(path, text) {
     created: fm.created || '',
     updated: fm.updated || '',
     order: parseOrder(fm.order),
+    wait: fm.wait || '',
+    lastLogBy: lastLogAuthor(section(text, 'ログ')),
     questions: parseQuestions(text),
     progress: bulletValue(here, '進行中'),
     next: bulletValue(here, '次の一手'),
     // PR / MR を拾うための本文（成果物と現在地。そのままは表示しない）
     refsText: (section(text, '成果物') + '\n' + here).replace(/<!--[\s\S]*?-->/g, ''),
   };
+}
+
+// 「## ログ」の最後の行の書き手（`- <時刻> [<ID>] <出来事>` の <ID>）。無ければ空
+export function lastLogAuthor(logText) {
+  const lines = String(logText).replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/).filter((l) => /^-\s/.test(l.trim()));
+  if (!lines.length) return '';
+  const m = /^-\s+\S+\s+\[([^\]]+)\]/.exec(lines[lines.length - 1].trim());
+  return m ? m[1] : '';
+}
+
+// 表示の状態（status を「いま誰の番か」「何を待っているか」で細かく分けたもの）。
+// status の値そのものは変えない（AGENTS.md の 8 値）。細分は、キー wait と、ログ・PC の状況から導く。
+//   Claude の番（暖色）: running 実行中 / confirm 確認待ち / doing 作業中 / ready 着手待ち
+//   利用者の番（寒色）: wait-spec 仕様の確認 / wait-approval 承認待ち / wait-command コマンドの実行依頼 / wait-answer 回答待ち / review マージ待ち
+//   そのほか: blocked 外部要因で停止 / draft 下書き / done・dropped
+export const WAIT_KINDS = ['spec', 'approval', 'command', 'answer'];
+export const PHASES = ['running', 'confirm', 'doing', 'ready', 'wait-spec', 'wait-approval', 'wait-command', 'wait-answer', 'review', 'blocked', 'draft'];
+export const PHASE_JA = {
+  running: 'Claude 実行中', confirm: 'Claude 確認待ち', doing: 'Claude 作業中', ready: 'Claude 着手待ち',
+  'wait-spec': '仕様の確認待ち', 'wait-approval': '承認待ち', 'wait-command': 'コマンドの実行待ち', 'wait-answer': '回答待ち', review: 'マージ待ち',
+  blocked: '外部要因で停止', draft: '下書き', done: '完了', dropped: '取りやめ',
+};
+export const PHASE_TURN = {
+  running: 'agent', confirm: 'agent', doing: 'agent', ready: 'agent',
+  'wait-spec': 'user', 'wait-approval': 'user', 'wait-command': 'user', 'wait-answer': 'user', review: 'user',
+  blocked: 'other', draft: 'other', done: 'other', dropped: 'other',
+};
+
+// running: この PC で手を動かしているセッションが担当しているタスクの ID の集まり（PC の状況の running から作る）
+export function taskPhase(t, running = new Set()) {
+  const s = t.status;
+  if (s === 'doing') {
+    if (running.has(t.id)) return 'running';
+    // 最後にログを書いたのが担当のエージェントでない（ダッシュボードで回答した・PR をマージしたなど）= 利用者が済ませ、エージェントが読むのを待っている
+    if (t.claimedBy && t.lastLogBy && t.lastLogBy !== t.claimedBy) return 'confirm';
+    return 'doing';
+  }
+  if (s === 'waiting') {
+    const qs = t.questions || [];
+    // GitHub の画面などで全部に答えたが、status が waiting のまま（エージェントが次に読んで doing に戻す）
+    if (qs.length && qs.every((q) => q.answer)) return 'confirm';
+    return WAIT_KINDS.includes(t.wait) ? `wait-${t.wait}` : 'wait-answer';
+  }
+  if (s in PHASE_TURN) return s;
+  return s || 'draft';
+}
+
+// PC の状況（state/pcs/<ID>.json）の running（[{ task, project, ... }] か、タスク ID の文字列の並び）から、タスク ID の集まりを作る
+export function runningTaskIds(pcs) {
+  const ids = new Set();
+  for (const p of pcs || []) {
+    if (!p || !Array.isArray(p.running)) continue;
+    for (const r of p.running) {
+      const id = typeof r === 'string' ? r : r && r.task;
+      if (id) ids.add(String(id));
+    }
+  }
+  return ids;
 }
 
 const PRIORITY_RANK = { urgent: 0, solo: 1, high: 2, normal: 3, low: 4 };
