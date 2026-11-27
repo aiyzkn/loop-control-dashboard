@@ -353,17 +353,19 @@ export function absText(iso) {
 }
 
 // 利用率（PC の状況の usage.fiveHour / usage.sevenDay）の表示。
-// 返すのは { pct: '23.5%' | '', level: 'ok' | 'warn' | 'alert' | 'off', resetsAt: '2026-11-26 18:16' | '', expired }
-// 解除時刻を過ぎた窓は expired（値は前の窓のもの）。70% 以上で warn、90% 以上で alert
+// 返すのは { pct: '23.5%' | '', level: 'ok' | 'warn' | 'alert' | 'off', resetsAt: '2026-11-26 18:16' | '', expired, prevPct }
+// 解除時刻を過ぎた窓は expired。値は前の窓のもので、読み込み時点（now）では窓が新しくなっているので、pct は 0%、
+// 前の窓の値は prevPct に入れる（20261128-dashboard-pc-usage-percent）。70% 以上で warn、90% 以上で alert
 export function usageView(w, now = Date.now()) {
-  if (!w || typeof w !== 'object') return { pct: '', level: 'off', resetsAt: '', expired: false };
+  if (!w || typeof w !== 'object') return { pct: '', level: 'off', resetsAt: '', expired: false, prevPct: '' };
   const v = Number(w.usedPercentage);
   const has = w.usedPercentage !== undefined && w.usedPercentage !== null && Number.isFinite(v);
   const r = Date.parse(w.resetsAt);
   const expired = !Number.isNaN(r) && r <= now;
-  const pct = has ? `${Math.round(v * 10) / 10}%` : '';
-  const level = !has || expired ? 'off' : v >= 90 ? 'alert' : v >= 70 ? 'warn' : 'ok';
-  return { pct, level, resetsAt: absText(w.resetsAt), expired };
+  const text = has ? `${Math.round(v * 10) / 10}%` : '';
+  if (expired) return { pct: '0%', level: 'ok', resetsAt: absText(w.resetsAt), expired: true, prevPct: text };
+  const level = !has ? 'off' : v >= 90 ? 'alert' : v >= 70 ? 'warn' : 'ok';
+  return { pct: text, level, resetsAt: absText(w.resetsAt), expired: false, prevPct: '' };
 }
 
 // 次の復帰（上限の解除）: 復帰タスクの次の実行（nextWakeAt）、無ければセッションの記録の上限の解除（limitResetAt）。

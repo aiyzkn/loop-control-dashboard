@@ -734,8 +734,13 @@ function render({ branch, tasks, pcs, inbox, projects, roster, archivedCount, pa
     const v = usageView(u[key], now);
     // 5 時間の窓は、切れたあと次の窓が始まるまで、ステータスラインの JSON に出ない（キットの古い版では前の窓の値も消える）
     if (!u[key]) return el('td', { title: key === 'fiveHour' ? '最後に書き出した時点の値に 5 時間の窓が無い（窓が切れたあと、まだ次の窓が始まっていない など）' : '最後に書き出した時点の値に週の窓が無い' }, el('span', { class: 'sub' }, '—'), el('div', { class: 'sub' }, '値なし'));
+    // 解除時刻を過ぎた窓は、読み込み時点の値（新しい窓なので 0%）を出す。前の窓の値と解除時刻は小さく添える
+    if (v.expired) return el('td', { title: '書き出した値の窓は、読み込み時点で解除時刻を過ぎている。新しい窓は 0% から数える（書き出しのあと使った分は、次の書き出しまで出ない）' },
+      el('span', { class: `usage u-${v.level}` }, v.pct),
+      el('div', { class: 'sub' }, `読み込み時点（前の窓 ${v.prevPct || '?'}・${v.resetsAt} に解除）`),
+      u.capturedAt ? el('div', { class: 'sub' }, `値: ${ageText(u.capturedAt)}`) : null);
     return el('td', {},
-      v.expired ? el('span', { class: 'sub' }, `解除済み（前の窓 ${v.pct || '?'}）`) : el('span', { class: `usage u-${v.level}` }, v.pct || '?'),
+      el('span', { class: `usage u-${v.level}` }, v.pct || '?'),
       v.resetsAt ? el('div', { class: 'sub' }, `解除 ${v.resetsAt}`) : null,
       u.capturedAt ? el('div', { class: 'sub' }, `値: ${ageText(u.capturedAt)}`) : null);
   };
