@@ -7,7 +7,7 @@ import {
   parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember,
   parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal,
   countByProject, countByDay, doneRatio, absText, usageView, nextResume,
-  taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN,
+  taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN, questionState,
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
@@ -350,6 +350,7 @@ function openEditor(t) {
     stage: select('stage', STAGES, t.stage),
     assignee: el('input', { name: 'assignee', value: t.assignee, spellcheck: 'false' }),
   };
+  const openCount = t.questions.filter((q) => questionState(q) === 'open').length;
   const answers = t.questions.map((q) => ({ q, input: el('input', { name: q.id, placeholder: q.answer ? '置き換えるときだけ書く' : '回答を書く', spellcheck: 'false' }) }));
   const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ。空なら変更の要約', spellcheck: 'false' });
   // 質問への回答とは別の、その場で思いついた指示。「利用者への質問と回答」の末尾に「- 指示（日付、書き手）: …」で足す
@@ -391,11 +392,13 @@ function openEditor(t) {
         row('状態', f.status, '判断待ち（waiting）・マージ待ち（review）のまま質問にすべて答えると、作業中（doing）に戻します（エージェントの番）。done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
         row('段階', f.stage),
         row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
-      answers.length ? el('h3', {}, '利用者への質問と回答') : null,
-      ...answers.map(({ q, input }) => el('div', { class: 'question' },
-        el('div', {}, el('strong', {}, q.id), ' ', ...linkify(q.question)),
+      answers.length ? el('h3', {}, '利用者への質問と回答',
+        openCount ? el('span', { class: 'q-open-count' }, ` 未回答 ${openCount} 件`) : null) : null,
+      // 未回答は色の帯と薄い地で目立たせ、回答済みは文字を控えめにする（並びは変えない）
+      ...answers.map(({ q, input }) => el('div', { class: `question q-${questionState(q)}` },
+        el('div', {}, questionState(q) === 'open' ? el('span', { class: 'q-badge' }, '未回答') : null, el('strong', {}, q.id), ' ', ...linkify(q.question)),
         q.details && q.details.length ? el('ul', { class: 'q-details sub' }, ...q.details.map((d) => el('li', {}, ...linkify(d)))) : null,
-        el('div', { class: 'sub' }, '回答: ', ...(q.answer ? linkify(q.answer) : ['（まだ）'])),
+        el('div', { class: 'sub' }, '回答: ', ...(q.answer ? linkify(q.answer) : [el('span', { class: 'q-pending' }, '（まだ）')])),
         input)),
       el('h3', {}, '指示（回答とは別に）'),
       el('label', { class: 'field' }, instruction,

@@ -69,3 +69,21 @@ test('applyTaskEdits の instruction: 状態は変えず、ログに残す', () 
   assert.match(r.text, /\[dashboard:me\] 指示を追加/);
   assert.equal(applyTaskEdits(task, { instruction: '  ' }, { who: 'x' }).changed, false);
 });
+
+test('質問の見た目の分け方: 回答の行が無い・空は未回答、書いてあれば回答済み', async () => {
+  const { questionState } = await import('../parse.js');
+  const qs = parseQuestions([
+    '## 利用者への質問と回答',
+    '',
+    '- Q1（2026-11-28、a）: 進めてよいか',
+    '  - 回答: 2026-11-28 はい',
+    '- Q2（2026-11-28、a）: どちらにするか',
+    '  - 回答:',
+    '- Q3（2026-11-28、a）: 回答の行が無い',
+    '',
+    '## 決定事項',
+  ].join('\n'));
+  assert.deepEqual(qs.map(questionState), ['answered', 'open', 'open']);
+  assert.equal(questionState({ answer: '   ' }), 'open');
+  assert.equal(questionState(null), 'open');
+});
