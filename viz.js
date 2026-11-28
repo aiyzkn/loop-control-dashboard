@@ -281,9 +281,10 @@ export function nightSpans(from, to, place = SUN_PLACE) {
 // 名簿の「AI のアカウント」が未記入（空・-・<…> のひな形）なら ''
 const accountName = (s) => { const v = String(s || '').trim(); return !v || v === '-' || /^<.*>$/.test(v) ? '' : v; };
 
-// 上限の帯の行。pcs = state/pcs/*.json（limits: [{ kind, startsAt, resetsAt, hit }]）。roster = parseRoster（account 付き）。
-// 行 = AI のアカウント（同じアカウントの PC はまとめる。未記入なら PC ごと）。窓は種類と解除時刻で 1 つにまとめる。
-// [{ name, agents, bands: [{ kind, start, reset, hit, active, x0, x1 }] }]（x は from〜to の中の位置。窓に掛からないものは除く）
+// 上限の帯の行。pcs = state/pcs/*.json（limits: [{ kind, startsAt, resetsAt, hit, peak? }] と usage）。roster = parseRoster（account 付き）。
+// PC の表の利用率（usage の fiveHour / sevenDay）の窓も入れる（kick.ps1 の判断を待たずに、表と同じいまの窓が出る。20261128-limit-band-fix）。
+// 行 = AI のアカウント（同じアカウントの PC はまとめる。未記入なら PC ごと）。窓は種類と解除時刻で 1 つにまとめる（hit はどれか、peak は最大）。
+// [{ name, agents, bands: [{ kind, start, reset, hit, peak, active, x0, x1 }] }]（x は from〜to の中の位置。窓に掛からないものは除く）
 // 上限の窓の長さ（ミリ秒）
 export const LIMIT_WINDOW_MS = { five_hour: 5 * 3600 * 1000, seven_day: 7 * 24 * 3600 * 1000 };
 
@@ -309,6 +310,20 @@ export function estimateWindows(windows, len, from, to) {
   return out.sort((a, b) => a.start - b.start);
 }
 
+// PC の usage（{ fiveHour: { usedPercentage, resetsAt }, sevenDay: … }）→ limits と同じ形の窓（開始は解除 − 窓の長さ。100% 以上は hit）
+export function usageWindows(usage) {
+  const out = [];
+  if (!usage || typeof usage !== 'object') return out;
+  for (const [k, kind] of [['fiveHour', 'five_hour'], ['sevenDay', 'seven_day']]) {
+    const w = usage[k];
+    const reset = w ? Date.parse(w.resetsAt) : NaN;
+    if (Number.isNaN(reset)) continue;
+    const peak = Number.isFinite(w.usedPercentage) ? w.usedPercentage : null;
+    out.push({ kind, startsAt: new Date(reset - LIMIT_WINDOW_MS[kind]).toISOString(), resetsAt: new Date(reset).toISOString(), hit: peak != null && peak >= 100, peak });
+  }
+  return out;
+}
+
 export function limitRows(pcs, roster, from, to, now = Date.now()) {
   const span = Math.max(to - from, 1);
   const groups = new Map();
@@ -319,17 +334,22 @@ export function limitRows(pcs, roster, from, to, now = Date.now()) {
     if (!groups.has(name)) groups.set(name, { name, agents: [], seen: new Map(), all: new Map() });
     const g = groups.get(name);
     if (p.agentId) g.agents.push(p.agentId);
-    for (const w of Array.isArray(p.limits) ? p.limits : []) {
+    for (const w of [...(Array.isArray(p.limits) ? p.limits : []), ...usageWindows(p.usage)]) {
       const start = Date.parse(w.startsAt), reset = Date.parse(w.resetsAt);
       const kind = w.kind === 'seven_day' ? 'seven_day' : w.kind === 'five_hour' ? 'five_hour' : '';
       if (!kind || Number.isNaN(start) || Number.isNaN(reset)) continue;
       const key = `${kind}/${reset}`;
+      const peak = Number.isFinite(w.peak) ? w.peak : null;
       // 推定の起点には、表示の範囲の外の窓も使う
       if (!g.all.has(key)) g.all.set(key, { kind, start, reset });
       if (reset <= from || start >= to) continue;
       const prev = g.seen.get(key);
-      if (prev) { prev.hit = prev.hit || !!w.hit; continue; }
-      g.seen.set(key, { kind, start, reset, hit: !!w.hit, active: start <= now && now < reset,
+      if (prev) {
+        prev.hit = prev.hit || !!w.hit;
+        if (peak != null && (prev.peak == null || peak > prev.peak)) prev.peak = peak;
+        continue;
+      }
+      g.seen.set(key, { kind, start, reset, hit: !!w.hit, peak, active: start <= now && now < reset,
         x0: Math.max(0, (start - from) / span), x1: Math.min(1, (reset - from) / span) });
     }
   }
