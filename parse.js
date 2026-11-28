@@ -182,6 +182,11 @@ export function parseQuestions(text) {
   return out;
 }
 
+// 質問の見た目の分け方。未回答（回答の行が無い・空）は目立たせ、回答済みは控えめにする
+export function questionState(q) {
+  return q && String(q.answer || '').trim() ? 'answered' : 'open';
+}
+
 // 受付（inbox.md）: 「## 」見出し 1 つが 1 件。コードの囲みの中と「## 手が空いた時に実行するタスク」の節は数えない（Get-InboxSummary と同じ）。
 // 手が空いた時の定義（### <案件>: <件名>。「（停止）」で始まるものは除く）も返す
 export function parseInbox(text) {

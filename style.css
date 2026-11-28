@@ -212,6 +212,13 @@ dialog h2 { margin-top: 0; }
 .field input, .field select, .field textarea, .question input, .dlg-body > input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); width: 100%; }
 .question { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
 .question input { margin-top: 4px; }
+/* 未回答の質問を目立たせる（琥珀の帯・薄い地・「未回答」の札）。回答済みは文字を控えめにして、未回答との差を付ける */
+.question.q-open { border-color: var(--warn); border-left-width: 4px; background: color-mix(in srgb, var(--warn) 9%, var(--bg)); }
+.question.q-open .q-pending { color: var(--warn); font-weight: 600; }
+.question.q-answered { color: var(--muted); }
+.question.q-answered strong { color: var(--muted); font-weight: 600; }
+.q-badge { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 999px; background: var(--warn); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 1.6; vertical-align: 1px; }
+.q-open-count { color: var(--warn); font-size: 13px; font-weight: 600; }
 .diff-file { margin: 8px 0; }
 .diff-path { font-family: ui-monospace, monospace; font-size: 12px; }
 pre.diff { margin: 4px 0; padding: 6px; overflow-x: auto; background: var(--card); border-radius: 6px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -400,6 +407,7 @@ svg.limit-chart .now { stroke: var(--link); stroke-width: 2; }
   clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
   box-shadow: inset 0 0 0 1px rgba(54, 214, 255, 0.10), inset 0 0 18px rgba(54, 214, 255, 0.08);
 }
+:root[data-theme="cockpit"] .question.q-open { border-color: var(--warn); box-shadow: inset 4px 0 0 var(--warn), inset 0 0 18px rgba(255, 176, 32, 0.14); }
 :root[data-theme="cockpit"] :is(.token-panel, dialog) { border-radius: 0; border-color: var(--hud); box-shadow: 0 0 0 1px var(--hud-glow), 0 12px 32px rgba(0, 0, 0, 0.7); }
 :root[data-theme="cockpit"] :is(.card .num, .pcard-num, .gauge-value) { color: var(--hud); text-shadow: 0 0 6px var(--hud-glow); font-variant-numeric: tabular-nums; }
 :root[data-theme="cockpit"] .card.alert .num { color: var(--err); text-shadow: 0 0 6px rgba(255, 77, 94, 0.5); }
