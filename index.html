@@ -17,7 +17,8 @@
       <h1>loop-control ダッシュボード</h1>
       <div class="actions">
         <label class="theme-pick">表示 <select id="theme" aria-label="表示の色"><option value="auto">自動（OS に合わせる）</option><option value="light">ライト</option><option value="dark">ダーク</option><option value="cockpit">コックピット</option></select></label>
-        <button type="button" id="reload">読み直す</button>
+        <button type="button" id="reload" title="指令リポジトリ・PC の状況・未マージの PR などを、すべて読み直します">読み直す</button>
+        <label class="auto-reload" title="入力中・画面（ダイアログ）を開いている間・直前に操作したとき・タブが裏にあるときは見送ります">自動 <select id="autoReload" aria-label="自動の読み直しの間隔"><option value="0">切</option><option value="1">1 分</option><option value="3">3 分</option><option value="5">5 分</option><option value="10">10 分</option></select></label>
         <button type="button" id="newRequestBtn" class="primary" hidden>＋ 依頼を登録</button>
         <details id="tokenBox" class="token-box">
           <summary>トークン</summary>

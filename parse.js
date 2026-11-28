@@ -187,6 +187,24 @@ export function questionState(q) {
   return q && String(q.answer || '').trim() ? 'answered' : 'open';
 }
 
+// 自動の読み直しを見送る理由（見送らないなら空）。利用者の入力・操作を邪魔しないよう、上から順に見る
+export const AUTO_RELOAD_MINUTES = [0, 1, 3, 5, 10];
+export const AUTO_RELOAD_IDLE_MS = 30 * 1000;
+export function autoReloadHold(s) {
+  if (!s.minutes) return 'off';
+  if (!s.loaded) return 'not-loaded';
+  if (s.loading) return 'loading';
+  if (s.busy) return 'busy';
+  if (s.hidden) return 'hidden';
+  if (s.dialogOpen) return 'dialog';
+  if (s.menuOpen) return 'menu';
+  if (s.editing) return 'editing';
+  if (s.dragging) return 'dragging';
+  if (s.now - (s.lastActivity || 0) < AUTO_RELOAD_IDLE_MS) return 'active';
+  if (s.now - (s.lastLoaded || 0) < s.minutes * 60 * 1000) return 'not-due';
+  return '';
+}
+
 // 受付（inbox.md）: 「## 」見出し 1 つが 1 件。コードの囲みの中と「## 手が空いた時に実行するタスク」の節は数えない（Get-InboxSummary と同じ）。
 // 手が空いた時の定義（### <案件>: <件名>。「（停止）」で始まるものは除く）も返す
 export function parseInbox(text) {
