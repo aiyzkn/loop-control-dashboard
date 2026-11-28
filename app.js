@@ -10,7 +10,7 @@ import {
   taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN, questionState, autoReloadHold, AUTO_RELOAD_MINUTES,
 } from './parse.js';
 import {
-  PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
+  PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, flagFront, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
   MERGE_METHODS, parsePrUrl, summarizeChecks, mergeVerdict, githubRepos, taskForPr,
   normalizeSlug, newTaskId, inboxEntry, appendToInbox, renderTask,
   tasksPathOf, reopenTask, addendumOnly, copyRequest, linkSegments,
@@ -333,7 +333,7 @@ function requestKick(agentId, task = '', { back } = {}) {
   });
 }
 
-// タスクの書き換えの画面（先頭の priority・status・stage・assignee、質問への回答、ログのメモ）
+// タスクの書き換えの画面（先頭の priority・status・stage・assignee・paused・keep_session、質問への回答、ログのメモ）
 function openEditor(t) {
   if (!ctx || !ctx.canWrite || busy) return;
   const text = ctx.texts.get(t.path);
@@ -349,7 +349,14 @@ function openEditor(t) {
     status: select('status', STATUSES, t.status, STATUS_JA),
     stage: select('stage', STAGES, t.stage),
     assignee: el('input', { name: 'assignee', value: t.assignee, spellcheck: 'false' }),
+    paused: el('input', { type: 'checkbox', name: 'paused' }),
+    pausedReason: el('input', { name: 'pausedReason', value: t.paused && t.pausedRaw.toLowerCase() !== 'true' ? t.pausedRaw : '', placeholder: '（任意）理由。空なら true', spellcheck: 'false' }),
+    keepSession: el('input', { type: 'checkbox', name: 'keepSession' }),
   };
+  f.paused.checked = !!t.paused;
+  f.keepSession.checked = !!t.keepSession;
+  // チェックボックスと文字を 1 行に（行全体が label なので、label を入れ子にしない）
+  const check = (input, label) => el('span', { class: 'check' }, input, el('span', {}, label));
   const openCount = t.questions.filter((q) => questionState(q) === 'open').length;
   const answers = t.questions.map((q) => ({ q, input: el('input', { name: q.id, placeholder: q.answer ? '置き換えるときだけ書く' : '回答を書く', spellcheck: 'false' }) }));
   const note = el('input', { name: 'log', placeholder: '（任意）ログに残すメモ。空なら変更の要約', spellcheck: 'false' });
@@ -359,7 +366,7 @@ function openEditor(t) {
   // このタスクを実行（即時実行の依頼）。宛先は担当のエージェント、無ければ PC の状況のあるエージェントから選ぶ
   const agentIds = [...new Set([t.claimedBy, ...((view && view.pcs) || []).map((p) => p.agentId)].filter((x) => x && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(x)))];
   let kickRow = null;
-  if (agentIds.length && !['done', 'dropped', 'draft'].includes(t.status)) {
+  if (agentIds.length && !t.paused && !['done', 'dropped', 'draft'].includes(t.status)) {   // 一時停止のタスクは起こさない（kick.ps1 も見送る）
     const target = select('kickAgent', agentIds, t.claimedBy && agentIds.includes(t.claimedBy) ? t.claimedBy : agentIds[0]);
     const kick = el('button', { type: 'button' }, 'このタスクを実行');
     kick.addEventListener('click', () => requestKick(target.value, t.id, { back: () => openEditor(t) }));
@@ -376,7 +383,10 @@ function openEditor(t) {
     for (const a of answers) if (a.input.value.trim()) { const v = a.input.value.trim(); ans[a.q.id] = `${isoLocal().slice(0, 10)}${/^[「『（(]/.test(v) ? '' : ' '}${v}`; }
     try {
       const r = applyTaskEdits(text, {
-        front: { priority: f.priority.value, status: f.status.value, stage: f.stage.value, assignee: f.assignee.value },
+        front: {
+          priority: f.priority.value, status: f.status.value, stage: f.stage.value, assignee: f.assignee.value,
+          ...flagFront({ paused: t.pausedRaw, keep_session: t.keepSessionRaw }, { paused: f.paused.checked, pausedReason: f.pausedReason.value, keepSession: f.keepSession.checked }),
+        },
         answers: ans, instruction: instruction.value, log: note.value,
       }, { who: WHO() });
       if (!r.changed) { msg.className = 'status'; msg.textContent = '変わったところがありません'; return; }
@@ -391,7 +401,9 @@ function openEditor(t) {
         row('優先度', f.priority, '緊急（urgent）・単独（solo）にできるのは利用者だけ（AGENTS.md 7.1）。緊急・単独の着手中は、同じアカウントでほかの高以下を動かさない（7.3）'),
         row('状態', f.status, '判断待ち（waiting）・マージ待ち（review）のまま質問にすべて答えると、作業中（doing）に戻します（エージェントの番）。done・dropped にしても、archive/ への移動と担当の解放はしません（エージェントの finish で行う）'),
         row('段階', f.stage),
-        row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前')),
+        row('割り当て（assignee）', f.assignee, 'any・エージェントの ID・道具の名前'),
+        row('一時停止（paused）', el('span', { class: 'check-row' }, check(f.paused, '一時停止する'), f.pausedReason), '着手・再開・自動起動の対象にしません（担当中なら、エージェントは区切りで記録して止まります）。状態と担当はそのまま。付け外しは利用者だけ'),
+        row('セッションを保つ（keep_session）', check(f.keepSession, 'セッションを終わらせない'), 'このタスクを担当したセッションを、上限の解除待ち・入力の無い時間が続いても閉じません（Chrome の拡張機能をつないだセッションなど）。ほかのセッションは、そのセッションが動いている間はこのタスクを取りません')),
       answers.length ? el('h3', {}, '利用者への質問と回答',
         openCount ? el('span', { class: 'q-open-count' }, ` 未回答 ${openCount} 件`) : null) : null,
       // 未回答は色の帯と薄い地で目立たせ、回答済みは文字を控えめにする（並びは変えない）
@@ -515,7 +527,17 @@ function phaseBadge(t) {
   const ph = taskPhase(t, runningTaskIds((view && view.pcs) || []));
   const turn = TURN_JA[PHASE_TURN[ph]] || '';
   const tip = [turn, `status: ${t.status}`, t.wait ? `wait: ${t.wait}` : ''].filter(Boolean).join('・');
-  return el('span', { class: `badge ph-${ph}`, title: tip }, PHASE_JA[ph] || STATUS_JA[t.status] || t.status);
+  const badge = el('span', { class: `badge ph-${ph}`, title: tip }, PHASE_JA[ph] || STATUS_JA[t.status] || t.status);
+  const flags = flagChips(t);
+  return flags.length ? el('span', { class: 'badges' }, badge, ...flags) : badge;
+}
+
+// 一時停止・セッションを保つの印（状態のラベルの横）
+function flagChips(t) {
+  const out = [];
+  if (t.paused) out.push(el('span', { class: 'flag flag-paused', title: `paused: ${t.pausedRaw}（着手・再開・自動起動の対象にしない）` }, '一時停止'));
+  if (t.keepSession) out.push(el('span', { class: 'flag flag-keep', title: 'keep_session（担当したセッションを終わらせない）' }, 'セッション保持'));
+  return out;
 }
 const OPEN = ['doing', 'waiting', 'review', 'blocked', 'ready', 'draft'];
 const PRIORITY_JA = { urgent: '緊急', solo: '単独', high: '高', normal: '普通', low: '低' };

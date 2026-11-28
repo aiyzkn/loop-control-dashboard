@@ -1,7 +1,7 @@
 // 指令リポジトリのタスクファイルを書き換えるための、純粋な関数（ブラウザでも Node.js の試験でも使う）。
 // どれも「元の文字列 → 新しい文字列」で、通信はしない。書き込み（コミット）は app.js が行う。
 // 形は auto-loop スキルの決まり（指令リポジトリの AGENTS.md 3 章）に合わせる。
-import { parseQuestions, compareInPriority } from './parse.js';
+import { parseQuestions, compareInPriority, flagValue } from './parse.js';
 
 export const PRIORITIES = ['urgent', 'solo', 'high', 'normal', 'low'];
 export const STATUSES = ['draft', 'ready', 'doing', 'waiting', 'review', 'blocked', 'done', 'dropped'];
@@ -240,6 +240,19 @@ export function applyTaskEdits(text, edits, { who, now = isoLocal() } = {}) {
   out = setFrontMatter(out, { ...front, updated: now });
   out = appendLog(out, `${now} [${who}] ${oneLine(edits.log) || notes.join('、')}`);
   return { text: out, changed: true, notes };
+}
+
+// 一時停止・セッションを保つの書き換え（書き換えの画面のチェックボックス）を、applyTaskEdits の front の形にする。
+// current = { paused, keep_session }（先頭の値そのもの。キーが無ければ undefined）。
+// 入れる: paused は理由（空なら true）、keep_session は true（元が真なら元の値のまま）。外す: キーがあれば空にする（ひな形の行は残す）、無ければ足さない（null）。
+// 元の値が偽（false など）のまま外すときは、元の値を返す（applyTaskEdits が「変わらない」とみなす）
+export function flagFront(current, { paused, pausedReason = '', keepSession }) {
+  const off = (raw) => (raw === undefined ? null : flagValue(raw) ? '' : raw);
+  const reason = oneLine(pausedReason);
+  return {
+    paused: paused ? (reason || 'true') : off(current.paused),
+    keep_session: keepSession ? (flagValue(current.keep_session) ? current.keep_session : 'true') : off(current.keep_session),
+  };
 }
 
 // ---- 依頼の登録（受付への追記・タスクファイルの作成） ----
