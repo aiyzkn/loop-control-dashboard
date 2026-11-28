@@ -190,3 +190,31 @@ test('上限の帯: アカウントでまとめ、窓に掛かるものだけ・
   assert.ok(main[1].x0 > 0.8 && main[1].x1 < 0.9);
   assert.deepEqual(rows[1].bands, []);
 });
+test('推定の窓: 記録のある窓の前後と間を、窓の長さで隙間なく敷き詰める', async () => {
+  const { estimateWindows } = await import('../viz.js');
+  const h = 3600 * 1000;
+  // 窓 [10,15) と [27,32)。範囲 [0,40)、長さ 5
+  const ws = [{ start: 27 * h, reset: 32 * h }, { start: 10 * h, reset: 15 * h }];
+  const est = estimateWindows(ws, 5 * h, 0, 40 * h).map((e) => [e.start / h, e.reset / h]);
+  // 前: [5,10) [0,5)（範囲にかかる -5〜0 は含めない）／間: [15,20) [20,25)（[25,30) は 27 に入りきらない）／後: [32,37) [37,42)
+  assert.deepEqual(est, [[0, 5], [5, 10], [15, 20], [20, 25], [32, 37], [37, 42]]);
+  assert.deepEqual(estimateWindows([], 5 * h, 0, 40 * h), []);
+  // 範囲の外の窓だけでも、起点にして範囲の中に推定を出す
+  const far = estimateWindows([{ start: -100 * h, reset: -95 * h }], 5 * h, 0, 12 * h).map((e) => [e.start / h, e.reset / h]);
+  assert.deepEqual(far, [[0, 5], [5, 10], [10, 15]]);
+});
+
+test('上限の行: 推定の窓は bands と別に estimates に入り、記録のある窓といまの窓が重ならない', async () => {
+  const { limitRows } = await import('../viz.js');
+  const from = Date.parse('2026-11-20T00:00:00+09:00'), to = Date.parse('2026-11-21T00:00:00+09:00');
+  const now = Date.parse('2026-11-20T18:00:00+09:00');
+  const pcs = [{ agentId: 'a', pc: 'A', limits: [{ kind: 'five_hour', startsAt: '2026-11-20T08:00:00+09:00', resetsAt: '2026-11-20T13:00:00+09:00', hit: true }] }];
+  const [row] = limitRows(pcs, [], from, to, now);
+  assert.equal(row.bands.length, 1);
+  const rel = (ms) => (ms - from) / 3600000;
+  // 前: [-2,3) [3,8)／後: [13,18) [18,23) [23,28)（記録のある窓 [8,13) の前後）
+  assert.deepEqual(row.estimates.map((e) => [rel(e.start), rel(e.reset)]), [[-2, 3], [3, 8], [13, 18], [18, 23], [23, 28]]);
+  assert.ok(row.estimates.every((e) => e.estimated && e.kind === 'five_hour'));
+  // 13:00 からの推定 [13,18) [18,23) のうち、いま（18:00）を含むのは [18,23)
+  assert.deepEqual(row.estimates.filter((e) => e.active).map((e) => rel(e.start)), [18]);
+});

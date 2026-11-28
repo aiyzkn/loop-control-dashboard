@@ -284,6 +284,31 @@ const accountName = (s) => { const v = String(s || '').trim(); return !v || v ==
 // 上限の帯の行。pcs = state/pcs/*.json（limits: [{ kind, startsAt, resetsAt, hit }]）。roster = parseRoster（account 付き）。
 // 行 = AI のアカウント（同じアカウントの PC はまとめる。未記入なら PC ごと）。窓は種類と解除時刻で 1 つにまとめる。
 // [{ name, agents, bands: [{ kind, start, reset, hit, active, x0, x1 }] }]（x は from〜to の中の位置。窓に掛からないものは除く）
+// 上限の窓の長さ（ミリ秒）
+export const LIMIT_WINDOW_MS = { five_hour: 5 * 3600 * 1000, seven_day: 7 * 24 * 3600 * 1000 };
+
+// 推定の窓。記録のある窓（windows: { start, reset }）を起点に、解除のたびにすぐ再開する理想的な使い方を仮定して、
+// 窓の長さ（len）で隙間なく敷き詰める: 最初の窓の前へ・窓と窓の間（入りきる分だけ）・最後の窓の後へ。
+// from〜to にかかるものだけを返す。記録が無ければ起点が無いので空
+export function estimateWindows(windows, len, from, to) {
+  const ws = [...(windows || [])].filter((w) => w.reset > w.start).sort((a, b) => a.start - b.start || a.reset - b.reset);
+  if (!ws.length || !(len > 0)) return [];
+  const out = [];
+  const push = (start, reset) => { if (reset > from && start < to) out.push({ start, reset }); };
+  // 前へ（from より前まで）
+  for (let t = ws[0].start; t > from; t -= len) push(t - len, t);
+  // 間へ（次の窓の始まりまでに入りきる分だけ。重なる窓のあいだには置かない）
+  for (let i = 0; i + 1 < ws.length; i++) {
+    const end = ws[i + 1].start;
+    let t = Math.max(...ws.slice(0, i + 1).map((w) => w.reset));
+    if (t >= to) break;
+    for (; t + len <= end; t += len) if (t + len > from) push(t, t + len);
+  }
+  // 後へ（to まで）
+  for (let t = Math.max(...ws.map((w) => w.reset)); t < to; t += len) push(t, t + len);
+  return out.sort((a, b) => a.start - b.start);
+}
+
 export function limitRows(pcs, roster, from, to, now = Date.now()) {
   const span = Math.max(to - from, 1);
   const groups = new Map();
@@ -291,21 +316,36 @@ export function limitRows(pcs, roster, from, to, now = Date.now()) {
     const r = (roster || []).find((x) => x.id === p.agentId);
     const acc = accountName(r && r.account);
     const name = acc || `PC ${p.pc || p.agentId || '?'}`;
-    if (!groups.has(name)) groups.set(name, { name, agents: [], seen: new Map() });
+    if (!groups.has(name)) groups.set(name, { name, agents: [], seen: new Map(), all: new Map() });
     const g = groups.get(name);
     if (p.agentId) g.agents.push(p.agentId);
     for (const w of Array.isArray(p.limits) ? p.limits : []) {
       const start = Date.parse(w.startsAt), reset = Date.parse(w.resetsAt);
       const kind = w.kind === 'seven_day' ? 'seven_day' : w.kind === 'five_hour' ? 'five_hour' : '';
-      if (!kind || Number.isNaN(start) || Number.isNaN(reset) || reset <= from || start >= to) continue;
+      if (!kind || Number.isNaN(start) || Number.isNaN(reset)) continue;
       const key = `${kind}/${reset}`;
+      // 推定の起点には、表示の範囲の外の窓も使う
+      if (!g.all.has(key)) g.all.set(key, { kind, start, reset });
+      if (reset <= from || start >= to) continue;
       const prev = g.seen.get(key);
       if (prev) { prev.hit = prev.hit || !!w.hit; continue; }
       g.seen.set(key, { kind, start, reset, hit: !!w.hit, active: start <= now && now < reset,
         x0: Math.max(0, (start - from) / span), x1: Math.min(1, (reset - from) / span) });
     }
   }
+  const estimatesOf = (g) => {
+    const out = [];
+    for (const kind of ['seven_day', 'five_hour']) {
+      const ws = [...g.all.values()].filter((w) => w.kind === kind);
+      const anyActive = ws.some((w) => w.start <= now && now < w.reset);
+      for (const e of estimateWindows(ws, LIMIT_WINDOW_MS[kind], from, to)) {
+        out.push({ kind, start: e.start, reset: e.reset, estimated: true, active: !anyActive && e.start <= now && now < e.reset,
+          x0: Math.max(0, (e.start - from) / span), x1: Math.min(1, (e.reset - from) / span) });
+      }
+    }
+    return out;
+  };
   return [...groups.values()]
-    .map((g) => ({ name: g.name, agents: g.agents.sort(), bands: [...g.seen.values()].sort((a, b) => a.reset - b.reset || a.kind.localeCompare(b.kind)) }))
+    .map((g) => ({ name: g.name, agents: g.agents.sort(), bands: [...g.seen.values()].sort((a, b) => a.reset - b.reset || a.kind.localeCompare(b.kind)), estimates: estimatesOf(g) }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
