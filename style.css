@@ -348,6 +348,10 @@ svg.limit-chart .night, .limits .swatch.night { fill: var(--fg); background: var
 svg.limit-chart .band { opacity: 0.35; }
 svg.limit-chart .band.hit { opacity: 0.85; }
 svg.limit-chart .band.active { stroke: var(--fg); stroke-width: 1.5; }
+/* 推定の窓: 薄い地と破線の枠（記録のある窓と見分ける） */
+svg.limit-chart .band.est { opacity: 0.16; stroke: var(--fg); stroke-width: 1; stroke-dasharray: 3 3; stroke-opacity: 0.9; }
+svg.limit-chart .band.est.active { opacity: 0.3; stroke-width: 1.5; }
+.limits .swatch.est { background: transparent; border: 1px dashed var(--muted); }
 svg.limit-chart .k-five_hour, .limits .swatch.k-five_hour { fill: var(--st-waiting); background: var(--st-waiting); }
 svg.limit-chart .k-seven_day, .limits .swatch.k-seven_day { fill: var(--st-blocked); background: var(--st-blocked); }
 svg.limit-chart .now { stroke: var(--link); stroke-width: 2; }
