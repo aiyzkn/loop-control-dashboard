@@ -190,6 +190,35 @@ test('上限の帯: アカウントでまとめ、窓に掛かるものだけ・
   assert.ok(main[1].x0 > 0.8 && main[1].x1 < 0.9);
   assert.deepEqual(rows[1].bands, []);
 });
+test('上限の帯: PC の表の利用率（usage）の窓も入る。記録の窓と同じなら 1 つ（hit は残し、peak は最大）', async () => {
+  const { limitRows, usageWindows } = await import('../viz.js');
+  const from = Date.parse('2026-11-22T00:00:00+09:00'), to = Date.parse('2026-11-30T00:00:00+09:00');
+  const now = Date.parse('2026-11-28T12:30:00+09:00');
+  const pcs = [{
+    agentId: 'a', pc: 'A',
+    limits: [
+      { kind: 'seven_day', startsAt: '2026-11-19T08:00:00+09:00', resetsAt: '2026-11-26T08:00:00+09:00', hit: true },
+      { kind: 'five_hour', startsAt: '2026-11-27T10:00:00+09:00', resetsAt: '2026-11-27T15:00:00+09:00', hit: true, peak: 80 },
+    ],
+    usage: { capturedAt: '2026-11-28T12:29:58+09:00', fiveHour: { usedPercentage: 32, resetsAt: '2026-11-28T15:00:00+09:00' }, sevenDay: { usedPercentage: 72, resetsAt: '2026-12-03T08:00:00+09:00' } },
+  }, {
+    agentId: 'b', pc: 'B',
+    usage: { fiveHour: { usedPercentage: 100, resetsAt: '2026-11-27T15:00:00+09:00' } },
+  }];
+  const roster = [{ id: 'a', account: 'main' }, { id: 'b', account: 'main' }];
+  const [row] = limitRows(pcs, roster, from, to, now);
+  const iso = (s) => new Date(Date.parse(s)).toISOString();
+  assert.deepEqual(row.bands.map((b) => [b.kind, new Date(b.start).toISOString(), new Date(b.reset).toISOString(), b.hit, b.peak, b.active]), [
+    ['seven_day', iso('2026-11-19T08:00:00+09:00'), iso('2026-11-26T08:00:00+09:00'), true, null, false],
+    ['five_hour', iso('2026-11-27T10:00:00+09:00'), iso('2026-11-27T15:00:00+09:00'), true, 100, false],
+    ['five_hour', iso('2026-11-28T10:00:00+09:00'), iso('2026-11-28T15:00:00+09:00'), false, 32, true],
+    ['seven_day', iso('2026-11-26T08:00:00+09:00'), iso('2026-12-03T08:00:00+09:00'), false, 72, true],
+  ]);
+  // いまの窓が記録にあるので、推定の窓は「いま」にならない
+  assert.ok(row.estimates.every((e) => !e.active));
+  assert.deepEqual(usageWindows(null), []);
+  assert.deepEqual(usageWindows({ fiveHour: { usedPercentage: 5 } }), []);   // 解除時刻の無い窓は使わない
+});
 test('推定の窓: 記録のある窓の前後と間を、窓の長さで隙間なく敷き詰める', async () => {
   const { estimateWindows } = await import('../viz.js');
   const h = 3600 * 1000;

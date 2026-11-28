@@ -16,7 +16,7 @@ import {
   tasksPathOf, reopenTask, addendumOnly, copyRequest, linkSegments,
 } from './edit.js';
 import { OPEN_STATUSES, projectSummary, matrix, shade, squarify, dayWindow, ganttRows, createdSeries, ribbonLayout, cumulative,
-  calendarDays, sumDays, gridCells, timeTicks, limitRows, nightSpans, SUN_PLACE } from './viz.js';
+  calendarDays, sumDays, gridCells, timeTicks, limitRows, usageWindows, nightSpans, SUN_PLACE } from './viz.js';
 
 const CONFIG = {
   org: 'aiyzkn',                 // 所属を確かめる組織
@@ -617,8 +617,8 @@ function limitBlock({ pcs, roster, now }) {
   const from = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() - 6).getTime();
   const to = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() + 2).getTime();
   const head = el('h3', {}, '上限の帯（直近 7 日と明日）');
-  if (!pcs.some((p) => Array.isArray(p.limits))) {
-    return el('div', { class: 'limits' }, head, el('p', { class: 'note' }, '上限の記録はまだありません（kick.ps1 が PC の状況に limits を書くようになると出ます）'));
+  if (!pcs.some((p) => Array.isArray(p.limits) || usageWindows(p.usage).length)) {
+    return el('div', { class: 'limits' }, head, el('p', { class: 'note' }, '上限の記録はまだありません（kick.ps1 が PC の状況に limits か usage を書くようになると出ます）'));
   }
   const rows = limitRows(pcs, roster, from, to, now);
   const W = 960, L = 170, laneH = 12, gap = 4, top = 20, rowH = laneH * 2 + gap + 14;
@@ -655,7 +655,7 @@ function limitBlock({ pcs, roster, now }) {
       chart.append(svg('rect', {
         class: `band k-${b.kind}${b.hit ? ' hit' : ''}${b.active ? ' active' : ''}`,
         x: x(b.x0), y: lanes[b.kind], width: Math.max(2, x(b.x1) - x(b.x0)), height: laneH, rx: 2,
-      }, svg('title', {}, `${r.name}: ${label}の窓 開始（推定）${fmt(b.start)} 〜 解除 ${fmt(b.reset)}${b.hit ? '（上限に当たった）' : ''}${b.active ? '・いまの窓' : ''}`)));
+      }, svg('title', {}, `${r.name}: ${label}の窓 開始（推定）${fmt(b.start)} 〜 解除 ${fmt(b.reset)}${b.peak != null ? `・最大 ${Math.round(b.peak)}%` : ''}${b.hit ? '（上限に当たった）' : ''}${b.active ? '・いまの窓' : ''}`)));
     }
   });
   if (now >= from && now <= to) {
@@ -667,7 +667,7 @@ function limitBlock({ pcs, roster, now }) {
     el('div', { class: 'scroll' }, chart),
     el('p', { class: 'limit-legend sub' }, key('k-five_hour hit', '5 時間の窓'), key('k-seven_day hit', '週の窓'), key('miss', '上限に当たっていない窓'), key('est', '推定の窓'),
       key('night', `夜（${SUN_PLACE.name}の日の入り〜日の出）`), key('now', 'いま')),
-    el('p', { class: 'note sub' }, '窓の始まりは記録に無いので、解除時刻から窓の長さ（5 時間・7 日）を引いた推定です。破線の薄い窓は、記録のある窓を起点に、解除のたびにすぐ再開した場合（理想的な使い方）を仮定して前後と間を敷き詰めた推定です。行は roster.md の「AI のアカウント」ごと（未記入なら PC ごと）。'));
+    el('p', { class: 'note sub' }, '窓は、セッションの記録（上限に近づいた窓）と、ステータスラインが見た利用率（上の表の 5 時間・週と同じ値。上限に当たらなかった窓も含む）から描きます。窓の始まりは記録に無いので、解除時刻から窓の長さ（5 時間・7 日）を引いた推定です。破線の薄い窓は、記録のある窓を起点に、解除のたびにすぐ再開した場合（理想的な使い方）を仮定して前後と間を敷き詰めた推定です。行は roster.md の「AI のアカウント」ごと（未記入なら PC ごと）。'));
 }
 // エージェントの ID → roster.md の行
 function agentLink(id, roster, branch, files) {
