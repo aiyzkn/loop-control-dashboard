@@ -325,3 +325,20 @@ test('受付の「優先: 単独」に印が付く（緊急には数えない）
   assert.equal(r.items[0].solo, true); assert.equal(r.items[0].urgent, false);
   assert.equal(r.urgent, 1);
 });
+test('自動の読み直し: 入力・操作・画面を開いている間は見送り、間隔が過ぎたときだけ読む', async () => {
+  const { autoReloadHold, AUTO_RELOAD_IDLE_MS } = await import('../parse.js');
+  const now = 10_000_000;
+  const base = { minutes: 5, loaded: true, now, lastActivity: now - AUTO_RELOAD_IDLE_MS - 1, lastLoaded: now - 5 * 60 * 1000 };
+  assert.equal(autoReloadHold(base), '');
+  assert.equal(autoReloadHold({ ...base, minutes: 0 }), 'off');
+  assert.equal(autoReloadHold({ ...base, loaded: false }), 'not-loaded');
+  assert.equal(autoReloadHold({ ...base, loading: true }), 'loading');
+  assert.equal(autoReloadHold({ ...base, busy: true }), 'busy');
+  assert.equal(autoReloadHold({ ...base, hidden: true }), 'hidden');
+  assert.equal(autoReloadHold({ ...base, dialogOpen: true }), 'dialog');
+  assert.equal(autoReloadHold({ ...base, menuOpen: true }), 'menu');
+  assert.equal(autoReloadHold({ ...base, editing: true }), 'editing');
+  assert.equal(autoReloadHold({ ...base, dragging: true }), 'dragging');
+  assert.equal(autoReloadHold({ ...base, lastActivity: now - 1000 }), 'active');
+  assert.equal(autoReloadHold({ ...base, lastLoaded: now - 4 * 60 * 1000 }), 'not-due');
+});

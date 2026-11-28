@@ -7,7 +7,7 @@ import {
   parseTask, sortTasks, parseInbox, pickFiles, ageText, isOrgMember,
   parseProject, parseRoster, findPullRequests, taskSignal, pcSignal, overallSignal,
   countByProject, countByDay, doneRatio, absText, usageView, nextResume,
-  taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN, questionState,
+  taskPhase, runningTaskIds, PHASE_JA, PHASE_TURN, questionState, autoReloadHold, AUTO_RELOAD_MINUTES,
 } from './parse.js';
 import {
   PRIORITIES, STATUSES, STAGES, staleChanges, kickRequestPath, kickRequest, applyTaskEdits, planReorder, priorityColumns, lineDiff, commitMessage, isoLocal,
@@ -169,7 +169,7 @@ async function load(token) {
   newRequestForm = ctx.canWrite ? buildNewRequestForm(roster) : null;
   $('newRequestBtn').hidden = !ctx.canWrite;
   $('tokenBox').open = false;
-  setStatus(`${me.login} として表示しています（${new Date().toLocaleString()} 時点。自動では更新しません）${ctx.canWrite ? '。書き込みできます' : '。書き込みの権限が無いので、参照だけです'}`, 'ok');
+  setStatus(`${me.login} として表示しています（${new Date().toLocaleString()} 時点${autoReloadMinutes() ? `。${autoReloadMinutes()} 分ごとに自動で読み直します（操作中は見送り）` : '。自動では読み直しません'}）${ctx.canWrite ? '。書き込みできます' : '。書き込みの権限が無いので、参照だけです'}`, 'ok');
 }
 
 let view = null;          // 表示に使った材料（書き込みの後は、ここを手元で直して描き直す）
@@ -491,12 +491,10 @@ function renderBoard(open, { pending = false } = {}) {
   const quick = el('input', { type: 'checkbox', id: 'quickReorder' });
   quick.checked = !!prefs.get('quickReorder');
   quick.addEventListener('change', () => prefs.set('quickReorder', quick.checked));
-  const reload = el('button', { type: 'button', class: 'mini' }, '読み直す');
-  reload.addEventListener('click', () => $('reload').click());
   board.replaceChildren(
     el('div', { class: 'board-tools' },
       el('p', { class: 'note' }, '列の中・列の間でカードを動かすと、優先度（priority）と並びの順（order）を書き換えます。キーボードでは、カードを選んで Alt + 矢印キー。'),
-      el('span', {}, el('label', {}, quick, ' 確認を省いてすぐ送る（このブラウザに覚えさせる）'), ' ', reload)),
+      el('span', {}, el('label', {}, quick, ' 確認を省いてすぐ送る（このブラウザに覚えさせる）'))),
     el('div', { class: 'board' + (pending ? ' pending' : '') }, ...cols));
 }
 
@@ -1475,10 +1473,8 @@ function drawOpenPrs(box, tasks, projects) {
   for (const r of openPrsCache.repos) for (const p of r.prs || []) rows.push({ r, p });
   rows.sort((a, b) => String(b.p.updated_at).localeCompare(String(a.p.updated_at)));
   const unreadable = openPrsCache.repos.filter((r) => !r.prs);
-  const reload = el('button', { type: 'button', class: 'mini' }, '読み直す');
-  reload.addEventListener('click', () => { openPrsCache = null; renderOpenPrs({ tasks, projects }); });
   const noPush = openPrsCache.repos.filter((r) => r.canPush === false && r.prs && r.prs.length).map((r) => r.full);
-  const head = el('p', { class: 'sub' }, `${openPrsCache.repos.length - unreadable.length} のリポジトリに、開いている PR が ${rows.length} 件`, ' ', reload);
+  const head = el('p', { class: 'sub' }, `${openPrsCache.repos.length - unreadable.length} のリポジトリに、開いている PR が ${rows.length} 件（読み直しはヘッダーの「読み直す」）`);
   const pushNote = noPush.length ? el('p', { class: 'sub warn-text' }, `${ctx.login} が書き込めないリポジトリ（ここからはマージできない。トークンではなくアカウントの権限）: ${noPush.join('、')}。「開く」「URL」から、書き込めるアカウントで GitHub を開いてください`) : null;
   const table = rows.length ? el('div', { class: 'scroll' }, el('table', { class: 'open-prs' },
     el('thead', {}, el('tr', {}, ...['リポジトリ', 'PR', '作成', 'ブランチ', '更新', 'タスク', '操作'].map((h) => el('th', {}, h)))),
@@ -1654,6 +1650,50 @@ function restoreFolds() {
   }
 }
 
+// 読み直し（手動・自動とも）。重ねて走らせない。自動のときは、ページのスクロールの位置を保つ
+let loading = false;
+let lastLoaded = 0;
+let lastActivity = 0;
+async function reloadAll(token, { auto = false } = {}) {
+  if (loading) return;
+  loading = true;
+  const y = window.scrollY;
+  try {
+    await load(token);
+    if (auto) requestAnimationFrame(() => window.scrollTo(0, y));
+  } catch (e) {
+    showError(e);
+  } finally {
+    loading = false;
+    lastLoaded = Date.now();   // 失敗しても、次の試みは間隔を空ける
+  }
+}
+const autoReloadMinutes = () => { const m = Number(prefs.get('autoReloadMinutes') ?? 5); return AUTO_RELOAD_MINUTES.includes(m) ? m : 5; };
+// 自動の読み直し。15 秒ごとに見て、間隔が過ぎていて、利用者の入力・操作を邪魔しないときだけ読み直す
+function setupAutoReload() {
+  const pick = $('autoReload');
+  pick.value = String(autoReloadMinutes());
+  pick.addEventListener('change', () => { prefs.set('autoReloadMinutes', Number(pick.value)); });
+  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(type, () => { lastActivity = Date.now(); }, { capture: true, passive: true });
+  }
+  const tick = () => {
+    const t = loadToken();
+    const a = document.activeElement;
+    const editing = !!a && a !== pick && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+    const hold = autoReloadHold({
+      minutes: autoReloadMinutes(), loaded: !!ctx && !!t, loading, busy, hidden: document.hidden,
+      dialogOpen: !!document.querySelector('dialog[open]'), menuOpen: $('tokenBox').open,
+      editing, dragging: !!document.querySelector('.dragging'),
+      now: Date.now(), lastActivity, lastLoaded,
+    });
+    if (!hold) reloadAll(t, { auto: true });
+  };
+  setInterval(tick, 15 * 1000);
+  // タブが表に戻ったとき、間隔が過ぎていればすぐ読む（操作の直後の見送りは同じ）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+}
+
 function init() {
   $('repoName').replaceChildren(link(`https://github.com/${CONFIG.owner}/${CONFIG.repo}`, `${CONFIG.owner}/${CONFIG.repo}`));
   $('orgName').replaceChildren(link(`https://github.com/${CONFIG.org}`, CONFIG.org));
@@ -1664,14 +1704,15 @@ function init() {
     if (!token) return;
     saveToken(token, $('remember').checked);
     $('token').value = '';
-    load(token).catch(showError);
+    reloadAll(token);
   });
-  $('reload').addEventListener('click', () => { const t = loadToken(); if (t) load(t).catch(showError); else setStatus('トークンを入れてください'); });
+  $('reload').addEventListener('click', () => { const t = loadToken(); if (t) reloadAll(t); else setStatus('トークンを入れてください'); });
+  setupAutoReload();
   $('forget').addEventListener('click', () => { clearToken(); ctx = null; if ($('dialog').open) $('dialog').close(); $('main').hidden = true; $('newRequestBtn').hidden = true; setStatus('トークンを消しました'); });
   $('newRequestBtn').addEventListener('click', openNewRequest);
   restoreFolds();
   const t = loadToken();
-  if (t) load(t).catch(showError);
+  if (t) reloadAll(t);
   else { setStatus('トークンを入れてください（右上の「トークン」）'); $('tokenBox').open = true; }
 }
 init();
