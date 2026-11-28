@@ -251,3 +251,11 @@ test('PC の利用率・次の復帰の表示', async () => {
   assert.equal(nextResume({ limitResetAt: '2026-11-26T15:00:00+09:00' }, now), null);
   assert.equal(nextResume({}, now), null);
 });
+
+test('一時停止のタスクは、信号を黄にする（done・dropped・draft は除く）', async () => {
+  const { taskSignal } = await import('../parse.js');
+  const now = Date.parse('2026-11-29T12:00:00+09:00');
+  assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-29T11:00:00+09:00', paused: true }, now), 'yellow');
+  assert.equal(taskSignal({ status: 'doing', heartbeatAt: '2026-11-29T11:00:00+09:00', paused: false }, now), 'green');
+  assert.equal(taskSignal({ status: 'draft', paused: true }, now), 'off');
+});

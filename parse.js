@@ -39,6 +39,12 @@ export function bulletValue(sectionText, label) {
   return '';
 }
 
+// 先頭の真偽の値（paused・keep_session）。キットの Test-FrontMatterFlag と同じ: 空・false・no・off・0 は偽、それ以外（true、理由の文など）は真
+export function flagValue(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s !== '' && !['false', 'no', 'off', '0'].includes(s);
+}
+
 // タスクファイルを、一覧に出す形にする
 export function parseTask(path, text) {
   const fm = parseFrontMatter(text);
@@ -60,6 +66,11 @@ export function parseTask(path, text) {
     updated: fm.updated || '',
     order: parseOrder(fm.order),
     wait: fm.wait || '',
+    // 一時停止（着手・再開・自動起動の対象にしない）と、セッションを保つ（見張りが閉じない）。raw は先頭の値そのもの（キーが無ければ undefined）
+    paused: flagValue(fm.paused),
+    pausedRaw: fm.paused,
+    keepSession: flagValue(fm.keep_session),
+    keepSessionRaw: fm.keep_session,
     lastLogBy: lastLogAuthor(section(text, 'ログ')),
     questions: parseQuestions(text),
     progress: bulletValue(here, '進行中'),
@@ -373,6 +384,8 @@ const HOUR = 3600 * 1000;
 // タスクの信号: red = 止まっている、yellow = 判断待ち・マージ待ち・着手待ち（日数によらず）・印が古い（24 時間超）、green = 進んでいる、off = 下書き
 export function taskSignal(t, now = Date.now()) {
   if (t.status === 'blocked') return 'red';
+  // 一時停止は、利用者が外すまで進まない（注意）
+  if (t.paused && !['done', 'dropped', 'draft'].includes(t.status)) return 'yellow';
   if (t.status === 'waiting' || t.status === 'review' || t.status === 'ready') return 'yellow';
   if (t.status === 'doing') {
     const hb = Date.parse(t.heartbeatAt);

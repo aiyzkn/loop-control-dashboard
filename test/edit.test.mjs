@@ -342,3 +342,37 @@ test('自動の読み直し: 入力・操作・画面を開いている間は見
   assert.equal(autoReloadHold({ ...base, lastActivity: now - 1000 }), 'active');
   assert.equal(autoReloadHold({ ...base, lastLoaded: now - 4 * 60 * 1000 }), 'not-due');
 });
+
+test('一時停止・セッションを保つ: 先頭の値の読み取りと、書き換えの形', async () => {
+  const { flagValue } = await import('../parse.js');
+  const { flagFront } = await import('../edit.js');
+  for (const v of ['true', 'yes', '利用者の確認待ち', 'TRUE']) assert.equal(flagValue(v), true, v);
+  for (const v of ['', ' ', 'false', 'No', 'off', '0', undefined]) assert.equal(flagValue(v), false, String(v));
+  const base = '---\nid: 20261129-x\nstatus: ready\npaused:\nkeep_session:\nupdated: 2026-11-29T00:00:00+09:00\n---\n\n# x\n\n## ログ\n\n- 2026-11-29T00:00:00+09:00 [a] 起票\n';
+  const t = parseTask('projects/p/tasks/20261129-x.md', base);
+  assert.equal(t.paused, false); assert.equal(t.keepSession, false); assert.equal(t.pausedRaw, '');
+  // 入れる: 理由が空なら true。keep_session は true
+  const on = flagFront({ paused: t.pausedRaw, keep_session: t.keepSessionRaw }, { paused: true, pausedReason: ' 承認待ち ', keepSession: true });
+  assert.deepEqual(on, { paused: '承認待ち', keep_session: 'true' });
+  const r = applyTaskEdits(base, { front: on }, { who: 'dashboard:me', now: '2026-11-29T01:00:00+09:00' });
+  const t2 = parseTask('projects/p/tasks/20261129-x.md', r.text);
+  assert.equal(t2.paused, true); assert.equal(t2.pausedRaw, '承認待ち'); assert.equal(t2.keepSession, true);
+  assert.match(r.text, /^paused: 承認待ち$/m);
+  assert.match(r.text, /\[dashboard:me\] paused: → 承認待ち、keep_session: → true$/m);
+  // そのまま（理由も同じ）なら変わらない
+  const same = flagFront({ paused: t2.pausedRaw, keep_session: t2.keepSessionRaw }, { paused: true, pausedReason: '承認待ち', keepSession: true });
+  assert.equal(applyTaskEdits(r.text, { front: same }, { who: 'dashboard:me' }).changed, false);
+  // 外す: キーがあれば空にする（行は残す）
+  const off = flagFront({ paused: t2.pausedRaw, keep_session: t2.keepSessionRaw }, { paused: false, keepSession: false });
+  assert.deepEqual(off, { paused: '', keep_session: '' });
+  const r3 = applyTaskEdits(r.text, { front: off }, { who: 'dashboard:me' }).text;
+  assert.match(r3, /^paused:$/m); assert.match(r3, /^keep_session:$/m);
+  // キーの無い古いタスクで外したままなら、キーを足さない。入れれば足す
+  const old = '---\nid: 20261129-y\nstatus: ready\n---\n\n## ログ\n';
+  const to = parseTask('projects/p/tasks/20261129-y.md', old);
+  assert.equal(to.pausedRaw, undefined);
+  assert.equal(applyTaskEdits(old, { front: flagFront({ paused: to.pausedRaw, keep_session: to.keepSessionRaw }, { paused: false, keepSession: false }) }, { who: 'x' }).changed, false);
+  assert.match(applyTaskEdits(old, { front: flagFront({}, { paused: false, keepSession: true }) }, { who: 'x' }).text, /^keep_session: true$/m);
+  // 偽の値（false）のまま外すなら変えない
+  assert.deepEqual(flagFront({ paused: 'false', keep_session: 'no' }, { paused: false, keepSession: false }), { paused: 'false', keep_session: 'no' });
+});
